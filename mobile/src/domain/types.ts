@@ -208,8 +208,15 @@ export type Profile = {
 
 export type ProfileUpdate = { name?: string; age?: number | null; address?: string; homeType?: string | null };
 
-/** "It sounds like Plumbing: A leak under the kitchen sink." */
-export type Classification = { trade: TradeId; label: string; summary: string };
+/** "It sounds like Plumbing: A leak under the kitchen sink.", with two other guesses to offer. */
+export type Classification = {
+  trade: TradeId;
+  label: string;
+  summary: string;
+  alternatives: { trade: TradeId; label: string }[];
+  /** With a photo: which of the top trade's shots it already covers. */
+  shotId: string | null;
+};
 
 export const REVIEW_TAGS = ["On time", "Tidy", "Fair price", "Clear communication"] as const;
 export type Review = { stars: number; tags: string[]; note: string };

@@ -38,7 +38,7 @@ export default function Home() {
   function snap() {
     haptic.tap();
     resetIntake();
-    router.push({ pathname: "/tell/pick", params: { mode: "photo" } });
+    router.push("/tell/photo");
   }
 
   return (

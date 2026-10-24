@@ -19,9 +19,11 @@ Enter any phone number or email, then the code **7246**. Nothing is sent: the se
 
 ## The flow
 
-1. **Home** → "Tell us what's wrong" records your voice (`expo-audio`). The server transcribes it with OpenAI (`OPENAI_API_KEY`; `SCOPE_FAKE_AI=1` returns a fixed sentence).
-2. **Show us**: one screening photo. Claude picks the trade from what you said and the photo ("It sounds like Plumbing"). "Not quite" opens the 8-trade picker. The camera button on Home goes straight to the picker.
-3. **Guided photos** from the trade's template, each checked by the vision model; then drag a dot onto the problem.
+1. **Home**: two ways in, either one is enough.
+   - **Camera button**: take one photo.
+   - **"Tell us what's wrong"**: talk. The recording (`expo-audio`) is transcribed on the server with OpenAI (`OPENAI_API_KEY`; `SCOPE_FAKE_AI=1` returns a fixed sentence).
+2. **Is this right?** Claude suggests the problem ("It looks like / It sounds like Plumbing") with two alternative chips. One tap starts it; "Something else" opens the 8-trade grid.
+3. **Guided photos** from the trade's template, each checked by the vision model. A photo from the camera path is reused as the shot it matches, so the guided camera starts at the next one. Then drag a dot onto the problem.
 4. **Questions** one at a time ("Something else? Write it" for your own words), then an optional note.
 5. **When works for you?**: a day and window. The estimate is made in the background; "Find pros" sends it to every matching pro.
 6. **Finding pros** → **Quotes** as pros answer on `/pro` → tap one → **You're booked**.

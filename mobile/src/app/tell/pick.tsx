@@ -1,4 +1,3 @@
-import { router, useLocalSearchParams } from "expo-router";
 import { useState } from "react";
 import { ActivityIndicator, Pressable, StyleSheet, View } from "react-native";
 import { TradeArt } from "@/components/Design";
@@ -6,15 +5,13 @@ import { haptic } from "@/components/haptics";
 import { Screen, Title } from "@/components/Screen";
 import { Text } from "@/components/Text";
 import { useHome } from "@/hooks/home";
-import { intake } from "@/hooks/intake";
-import { api } from "@/services";
+import { startFromIntake } from "@/hooks/intake";
 import { templates } from "@/templates";
 import { tradeCategory } from "@/templates/art";
 import { colors, radius, shadow } from "@/theme";
 
-/** Tell us · not quite ("What's closest?"). Also where the Home screen's camera button starts. */
+/** Tell us · "Something else": every category. Keeps what they said or the photo they took. */
 export default function Pick() {
-  const { mode } = useLocalSearchParams<{ mode?: string }>();
   const { home } = useHome();
   const [starting, setStarting] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -25,11 +22,7 @@ export default function Pick() {
     setStarting(trade);
     setError(null);
     try {
-      // The camera button skips the voice step, so there's nothing said to keep.
-      const scan = await api.createScan(home.id, trade, mode === "photo" ? null : intake.text || null);
-      // Drop the "Tell us" screens so leaving the scan returns to the tabs.
-      router.dismissAll();
-      router.push(`/scan/${scan.id}`);
+      await startFromIntake(home.id, trade);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Couldn't start. Try again.");
       setStarting(null);
@@ -39,7 +32,7 @@ export default function Pick() {
   return (
     <Screen>
       <View style={{ marginTop: 16, marginBottom: 28 }}>
-        <Title title="What's closest?" sub={mode === "photo" ? "Pick one, then we'll walk you through the photos." : null} />
+        <Title title="What's closest?" />
       </View>
       {error ? (
         <Text variant="caption" tone="danger" style={{ marginBottom: 12 }} accessibilityRole="alert">
