@@ -6,9 +6,7 @@ import { savePhoto } from "@/lib/photos";
 export const POST = route<{ id: string }>(async (req, { id }) => {
   const user = await requireApiUser("customer");
   const job = loadJobFor(user, toId(id));
-  if (job.status !== "intake" && job.status !== "more_info") {
-    throw new HttpError(409, "Photos can only be added while describing the problem.");
-  }
+  if (job.status !== "intake") throw new HttpError(409, "Photos can only be added while describing the problem.");
   const form = await req.formData();
   const files = form.getAll("photos").filter((f): f is File => f instanceof File);
   const labels = form.getAll("labels").map(String);

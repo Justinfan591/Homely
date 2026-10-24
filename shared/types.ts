@@ -2,7 +2,6 @@
 import { z } from "zod";
 
 export const TRADES = [
-  "mold",
   "plumbing",
   "electrical",
   "hvac",
@@ -16,7 +15,6 @@ export const TRADES = [
 export type Trade = (typeof TRADES)[number];
 
 export const TRADE_LABELS: Record<Trade, string> = {
-  mold: "Mold",
   plumbing: "Plumbing",
   electrical: "Electrical",
   hvac: "Heating & cooling",
@@ -46,9 +44,6 @@ export const reportSchema = z.object({
   customer_answers: z.array(z.object({ question: z.string(), answer: z.string() })),
   photo_ids_referenced: z.array(z.number()),
   confidence: z.enum(["low", "medium", "high"]),
-  // Optional so reports saved before these fields existed still parse.
-  severity: z.number().int().min(1).max(5).optional(),
-  affected_area_m2: z.number().min(0).nullable().optional(),
 });
 export type JobReport = z.infer<typeof reportSchema>;
 
@@ -71,9 +66,6 @@ export const questionsSchema = z.object({
 });
 export type QuestionSet = z.infer<typeof questionsSchema>;
 
-// A provider's "Ask for more" request, and the homeowner's reply.
-export type MoreInfoRequest = { providerId: number; providerName: string; message: string; shots: string[]; reply?: string };
-
 // What the intake chat UI renders for each step.
 export type IntakeStep =
   | { kind: "customer"; text: string; photoIds: number[] }
@@ -87,7 +79,6 @@ export const STATUS_LABELS: Record<string, string> = {
   report_ready: "Report ready",
   open: "Finding a local pro",
   agent_review: "With a support agent",
-  more_info: "Pro needs more info",
   assigned: "Pro assigned",
   en_route: "Pro on the way",
   in_progress: "Work in progress",

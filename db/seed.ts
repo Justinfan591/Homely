@@ -10,13 +10,6 @@ const people = [
   { role: "agent", name: "Alex Support", email: "agent@demo.com", phone: "555-0199" },
   {
     role: "provider",
-    name: "Dana Moreau",
-    email: "mold@demo.com",
-    phone: "555-0144",
-    profile: { businessName: "Mold Busters", trades: ["mold"], zips: ["94110", "94103", "94114"], bio: "Mold inspection, testing and remediation." },
-  },
-  {
-    role: "provider",
     name: "Pat Rivera",
     email: "plumber@demo.com",
     phone: "555-0111",

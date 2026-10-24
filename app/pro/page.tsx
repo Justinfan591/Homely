@@ -1,85 +1,91 @@
 import Link from "next/link";
-import { money, timeAgo } from "@/shared/format";
-import { STATUS_LABELS, TRADE_LABELS, type Trade } from "@/shared/types";
-import { severityOf } from "@/lib/pricing";
+import { db, schema } from "@/db";
+import type { Provider } from "@/db/schema";
+import { HttpError } from "@/lib/auth";
+import { jobDetail, providerById, queue } from "@/lib/scope/pro";
+import { timeAgo } from "@/shared/format";
 import {
-  allProviders,
-  customerOf,
-  googleCalendarUrl,
-  jobPhotos,
-  priceFor,
-  proProvider,
-  proQueue,
-  slotOptions,
-  type Pro,
-  type ProJob,
-  type Tab,
-} from "@/lib/pro";
+  ESTIMATE_LABEL,
+  JOB_STATUS_LABELS,
+  SEVERITY_LABELS,
+  priceRange,
+  slotLabel,
+  usd,
+  type ProJobDetail,
+  type ProQueueCard,
+  type ProTab,
+} from "@/shared/scope";
 import { accept, advance, askMore, decline, saveRates, virtualCall } from "./actions";
 import { AutoRefresh } from "./AutoRefresh";
 import { proHref } from "./href";
 import "./pro.css";
 
 export const dynamic = "force-dynamic";
-export const metadata = { title: "Molsters Pro" };
+export const metadata = { title: "Scope Pro" };
 
 type Search = { provider?: string; tab?: string; job?: string; error?: string; saved?: string };
 
-const TABS: { id: Tab; label: string }[] = [
+const TABS: { id: ProTab; label: string }[] = [
   { id: "new", label: "New" },
   { id: "review", label: "Needs review" },
   { id: "active", label: "Active" },
   { id: "done", label: "Done" },
 ];
 
-// From the mold template's required shots; the free-text box covers anything else.
-const SHOT_SUGGESTIONS = [
-  "Wide shot of the whole room",
-  "Close-up of the affected spot",
-  "The ceiling above it",
-  "The wall next to it",
-  "Any window, pipe or vent nearby",
-];
+const when = (iso: string) => new Date(iso).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+const pct = (c: number) => `${Math.round(c * 100)}%`;
+const confidenceLevel = (c: number) => (c >= 0.8 ? "high" : c >= 0.6 ? "medium" : "low");
 
-const STEPS = ["assigned", "en_route", "in_progress", "completed"] as const;
-const NEXT: Record<string, { to: string; label: string }> = {
-  assigned: { to: "en_route", label: "On my way" },
-  en_route: { to: "in_progress", label: "Arrived — start work" },
-  in_progress: { to: "completed", label: "Mark done" },
-};
+function provider(id: unknown): Provider | null {
+  try {
+    return providerById(id);
+  } catch (err) {
+    if (err instanceof HttpError) return null;
+    throw err;
+  }
+}
 
-const when = (d: Date) => d.toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
-const usd = (n: number) => money({ min: n, max: n });
+/** Opened job, or null if this provider can't see it (any more). */
+function detail(p: Provider, id: unknown): ProJobDetail | null {
+  const jobId = Number(id);
+  if (!Number.isInteger(jobId) || jobId <= 0) return null;
+  try {
+    return jobDetail(p, jobId);
+  } catch (err) {
+    if (err instanceof HttpError) return null;
+    throw err;
+  }
+}
 
 export default async function ProPage({ searchParams }: { searchParams: Promise<Search> }) {
   const q = await searchParams;
-  const pro = proProvider(q.provider);
-  if (!pro) return <PickProvider />;
+  const p = provider(q.provider);
+  if (!p) return <PickProvider />;
 
-  const queue = proQueue(pro);
-  const tab = q.tab === "rates" || (q.tab && q.tab in queue) ? (q.tab as Tab | "rates") : "new";
-  const list = tab === "rates" ? [] : queue[tab];
-  const selected = Object.values(queue).flat().find((j) => j.id === Number(q.job));
-  const name = pro.profile.businessName ?? pro.user.name;
+  const tabs = queue(p);
+  const tab = q.tab === "rates" || (q.tab && q.tab in tabs) ? (q.tab as ProTab | "rates") : "new";
+  const selected = q.job ? detail(p, q.job) : null;
 
   return (
     <div className="pro">
       <AutoRefresh />
       <header className="top">
         <div>
-          <h1>{name}</h1>
-          <span className="muted">Provider dashboard · {pro.user.name}</span>
+          <h1>{p.name}</h1>
+          <span className="muted">
+            Provider dashboard · {p.trades.join(", ")} · {p.radiusKm} km radius · ★ {p.rating.toFixed(1)} ({p.ratingCount})
+          </span>
         </div>
         <span className="live">● Live</span>
       </header>
 
       <nav className="tabs">
         {TABS.map((t) => (
-          <Link key={t.id} href={proHref(pro.user.id, { tab: t.id })} className={tab === t.id ? "on" : ""}>
-            {t.label} <span className="count">{queue[t.id].length}</span>
+          <Link key={t.id} href={proHref(p.id, { tab: t.id })} className={tab === t.id ? "on" : ""}>
+            {t.label} <span className="count">{tabs[t.id].length}</span>
           </Link>
         ))}
-        <Link href={proHref(pro.user.id, { tab: "rates" })} className={tab === "rates" ? "on" : ""}>
+        <Link href={proHref(p.id, { tab: "rates" })} className={tab === "rates" ? "on" : ""}>
           Rate card
         </Link>
       </nav>
@@ -87,17 +93,17 @@ export default async function ProPage({ searchParams }: { searchParams: Promise<
       {q.error && <p className="error">{q.error}</p>}
 
       {tab === "rates" ? (
-        <RateCard pro={pro} saved={!!q.saved} />
+        <RateCard p={p} saved={!!q.saved} />
       ) : (
         <main className="split">
           <section className="queue">
-            {list.length === 0 && <p className="empty">Nothing here right now. New jobs show up automatically.</p>}
-            {list.map((j) => (
-              <QueueCard key={j.id} job={j} pro={pro} tab={tab} selected={j.id === selected?.id} />
+            {tabs[tab].length === 0 && <p className="empty">Nothing here right now. New jobs show up automatically.</p>}
+            {tabs[tab].map((c) => (
+              <QueueCard key={c.jobId} card={c} providerId={p.id} tab={tab} selected={c.jobId === selected?.job.id} />
             ))}
           </section>
           <section className="detail">
-            {selected ? <SpecDetail job={selected} pro={pro} tab={tab} /> : <p className="empty">Select a job to open its spec.</p>}
+            {selected ? <SpecDetail d={selected} p={p} tab={tab} /> : <p className="empty">Select a job to open its spec.</p>}
           </section>
         </main>
       )}
@@ -106,14 +112,18 @@ export default async function ProPage({ searchParams }: { searchParams: Promise<
 }
 
 function PickProvider() {
+  const providers = db.select().from(schema.providers).all();
   return (
     <div className="pro narrow">
-      <h1>Molsters Pro</h1>
-      <p className="muted">Pick the provider to run the dashboard as. The link keeps it (<code>?provider=&lt;id&gt;</code>).</p>
+      <h1>Scope Pro</h1>
+      <p className="muted">
+        Pick the provider to run the dashboard as. The link keeps it (<code>?provider=&lt;id&gt;</code>).
+      </p>
       <div className="card">
-        {allProviders().map((p) => (
-          <Link key={p.id} href={proHref(p.id)} className="row-link">
-            {p.businessName ?? p.name} <span className="muted">· {p.name} · id {p.id}</span>
+        {providers.length === 0 && <p className="muted">No providers yet. Run npm run setup.</p>}
+        {providers.map((x) => (
+          <Link key={x.id} href={proHref(x.id)} className="row-link">
+            {x.name} <span className="muted">· {x.trades.join(", ")} · id {x.id}</span>
           </Link>
         ))}
       </div>
@@ -131,84 +141,71 @@ function Severity({ value }: { value: number }) {
   );
 }
 
-function Confidence({ level }: { level: string }) {
-  return <span className={`badge conf-${level}`}>{level} confidence</span>;
+function Confidence({ value }: { value: number }) {
+  return <span className={`badge conf-${confidenceLevel(value)}`}>{pct(value)} confidence</span>;
 }
 
-function QueueCard({ job, pro, tab, selected }: { job: ProJob; pro: Pro; tab: Tab; selected: boolean }) {
-  const r = job.report;
-  const range = priceFor(job, pro);
+function QueueCard({ card: c, providerId, tab, selected }: { card: ProQueueCard; providerId: number; tab: ProTab; selected: boolean }) {
   return (
-    <Link href={proHref(pro.user.id, { tab, job: job.id })} className={`card qcard ${selected ? "selected" : ""}`}>
+    <Link href={proHref(providerId, { tab, job: c.jobId })} className={`card qcard ${selected ? "selected" : ""}`}>
       <div className="qtop">
-        <strong>{TRADE_LABELS[r.category as Trade] ?? r.category}</strong>
-        <span className="muted">{timeAgo(job.createdAt)}</span>
+        <strong>{c.tradeLabel}</strong>
+        <span className="muted">{timeAgo(c.createdAt)}</span>
       </div>
-      <div className="qtitle">{r.title}</div>
+      <div className="qtitle">{c.title}</div>
       <div className="qmeta">
-        <Severity value={severityOf(r)} />
-        <span>{r.affected_area_m2 ? `${r.affected_area_m2} m²` : "— m²"}</span>
-        <span>{job.price != null ? usd(job.price) : `${usd(range.low)}–${usd(range.high)}`}</span>
-        <span className="muted">ZIP {job.zip}</span>
+        <Severity value={c.severity} />
+        <span>{c.areaM2} m²</span>
+        <span>{priceRange(c.quote.low, c.quote.high)}</span>
+        <span className="muted">{c.distanceKm} km</span>
       </div>
       <div className="qmeta">
-        <Confidence level={r.confidence} />
-        {job.status === "more_info" && <span className="badge wait">Waiting for homeowner</span>}
-        {job.status === "agent_review" && <span className="badge handoff">Handoff</span>}
-        {tab === "active" && <span className="badge">{STATUS_LABELS[job.status]}</span>}
+        <Confidence value={c.confidence} />
+        {c.status === "more_info" && <span className="badge wait">Waiting for homeowner</span>}
+        {c.status === "handoff" && <span className="badge handoff">Handoff</span>}
+        {c.status === "virtual_call" && <span className="badge">Virtual call</span>}
+        {tab === "active" && <span className="badge">{JOB_STATUS_LABELS[c.status]}</span>}
       </div>
     </Link>
   );
 }
 
-function List({ title, items }: { title: string; items: string[] }) {
-  if (!items.length) return null;
-  return (
-    <div>
-      <h4>{title}</h4>
-      <ul>
-        {items.map((x, i) => (
-          <li key={i}>{x}</li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
-function SpecDetail({ job, pro, tab }: { job: ProJob; pro: Pro; tab: Tab }) {
-  const r = job.report;
-  const range = priceFor(job, pro);
-  const photos = jobPhotos(job.id);
-  const mine = job.providerId === pro.user.id;
+function SpecDetail({ d, p, tab }: { d: ProJobDetail; p: Provider; tab: ProTab }) {
+  const { job, spec, template, quote } = d;
+  const status = job.status;
+  const mine = job.provider?.id === p.id;
+  const shotPrompt = (id: string) => template.required_shots.find((s) => s.id === id)?.prompt ?? id;
   const hidden = (
     <>
-      <input type="hidden" name="provider" value={pro.user.id} />
+      <input type="hidden" name="provider" value={p.id} />
       <input type="hidden" name="job" value={job.id} />
       <input type="hidden" name="tab" value={tab} />
     </>
   );
+  const open = ["pending", "handoff", "virtual_call"].includes(status);
+  const steps = job.mode === "virtual" ? (["accepted", "done"] as const) : (["accepted", "en_route", "done"] as const);
+  const next = status === "accepted" ? (job.mode === "virtual" ? "done" : "en_route") : status === "en_route" ? "done" : null;
 
   return (
     <div className="card spec">
       <div className="qtop">
         <span className="muted">
-          #{job.id} · {TRADE_LABELS[r.category as Trade] ?? r.category} · {timeAgo(job.createdAt)}
+          Job #{job.id} · {template.label} · {timeAgo(job.createdAt)} · spec v{spec.version}
         </span>
-        <span className="badge">{STATUS_LABELS[job.status]}</span>
+        <span className="badge">{JOB_STATUS_LABELS[status]}</span>
       </div>
-      <h2>{r.title}</h2>
+      <h2>{spec.title}</h2>
       <div className="qmeta">
-        <Severity value={severityOf(r)} /> <span>Severity {severityOf(r)}/5</span>
-        <span>{r.affected_area_m2 ? `${r.affected_area_m2} m²` : "Area n/a"}</span>
-        <Confidence level={r.confidence} />
+        <Severity value={spec.severity} /> <span>{SEVERITY_LABELS[spec.severity]}</span>
+        <span>{spec.areaM2} m²</span>
+        <Confidence value={spec.confidence} />
+        {job.mode === "virtual" && <span className="badge">Virtual call</span>}
       </div>
 
       <div className="price">
         <div>
           <span className="muted">Calculated price</span>
-          <strong>
-            {usd(range.low)}–{usd(range.high)}
-          </strong>
+          <strong>{priceRange(quote.low, quote.high)}</strong>
         </div>
         {job.price != null && (
           <div>
@@ -216,16 +213,16 @@ function SpecDetail({ job, pro, tab }: { job: ProJob; pro: Pro; tab: Tab }) {
             <strong>{usd(job.price)}</strong>
           </div>
         )}
-        <span className="muted small">Estimate — confirmed by provider. From your rate card, not the AI.</span>
+        <span className="muted small">{ESTIMATE_LABEL}. From your rate card, not the AI.</span>
       </div>
 
-      {photos.length > 0 && (
+      {d.photos.length > 0 && (
         <div className="photos">
-          {photos.map((p, i) => (
-            <a key={p.id} href={`/pro/photos/${p.id}?provider=${pro.user.id}`} target="_blank" rel="noreferrer">
-              {/* eslint-disable-next-line @next/next/no-img-element -- private photos served by our own route */}
-              <img src={`/pro/photos/${p.id}?provider=${pro.user.id}`} alt={p.label ?? `Photo ${i + 1}`} />
-              <span>{p.label || `Photo ${i + 1}`}</span>
+          {d.photos.map((ph) => (
+            <a key={ph.id} href={ph.src} target="_blank" rel="noreferrer">
+              {/* eslint-disable-next-line @next/next/no-img-element -- signed private photo links */}
+              <img src={ph.src} alt={shotPrompt(ph.shotId)} />
+              <span>{shotPrompt(ph.shotId)}</span>
             </a>
           ))}
         </div>
@@ -233,70 +230,74 @@ function SpecDetail({ job, pro, tab }: { job: ProJob; pro: Pro; tab: Tab }) {
 
       <div>
         <h4>AI summary</h4>
-        <p>{r.summary}</p>
+        <p>{spec.summary}</p>
+        <p className="muted small">{template.policy.finding_wording}</p>
       </div>
-      <List title="Safety" items={r.safety_hazards} />
-      <List title="What the photos show" items={r.observed_issues} />
-      <List title="Possible causes" items={r.likely_causes} />
-      <List title="Work needed" items={r.scope_of_work} />
-      <List title="Parts & materials" items={r.materials_likely} />
-      {r.access_notes && (
+      {Object.keys(spec.fields).length > 0 && (
         <div>
-          <h4>Access</h4>
-          <p>{r.access_notes}</p>
+          <h4>Extracted fields</h4>
+          <dl>
+            {Object.entries(spec.fields).map(([k, v]) => (
+              <div key={k}>
+                <dt>{template.output_labels[k] ?? k}</dt>
+                <dd>{v}</dd>
+              </div>
+            ))}
+          </dl>
         </div>
       )}
-      {r.customer_answers.length > 0 && (
+      {d.answers.length > 0 && (
         <div>
           <h4>Homeowner answers</h4>
           <dl>
-            {r.customer_answers.map((a, i) => (
-              <div key={i}>
-                <dt>{a.question}</dt>
+            {d.answers.map((a) => (
+              <div key={a.id}>
+                <dt>{a.q}</dt>
                 <dd>{a.answer}</dd>
               </div>
             ))}
           </dl>
         </div>
       )}
-      {job.moreInfo && (
+      {(d.scan.notes || d.scan.skippedShots.length > 0) && (
+        <div>
+          <h4>Notes</h4>
+          {d.scan.notes && <p style={{ whiteSpace: "pre-line" }}>{d.scan.notes}</p>}
+          {d.scan.skippedShots.length > 0 && <p className="muted">Skipped: {d.scan.skippedShots.map(shotPrompt).join(", ")}</p>}
+        </div>
+      )}
+      {status === "more_info" && job.request && (
         <div className="followup">
-          <h4>Follow-up from {job.moreInfo.providerName}</h4>
-          <p>Asked for: {[...job.moreInfo.shots, job.moreInfo.message].filter(Boolean).join("; ")}</p>
-          {job.status === "more_info" ? (
-            <p className="muted">Waiting for the homeowner. It moves back to New when they reply.</p>
-          ) : (
-            <p>Reply: {job.moreInfo.reply || "(photos only)"}</p>
-          )}
+          <h4>You asked for more</h4>
+          <p>
+            {[...job.request.shotIds.map(shotPrompt), ...job.request.questionIds.map((id) => template.questions.find((x) => x.id === id)?.q ?? id), job.request.message]
+              .filter(Boolean)
+              .join("; ")}
+          </p>
+          <p className="muted">Waiting for the homeowner. It comes back here with an updated spec when they reply.</p>
         </div>
       )}
 
-      {(job.status === "open" || job.status === "agent_review") && (
+      {open && (
         <div className="actions">
           <details>
-            <summary className="btn primary">Accept</summary>
+            <summary className="btn primary">{status === "virtual_call" ? "Accept the call" : "Accept"}</summary>
             <form action={accept} className="panel">
               {hidden}
               <fieldset>
                 <legend>Time slot</legend>
-                {slotOptions().map((s, i) => (
-                  <label key={s.toISOString()}>
-                    <input type="radio" name="slot" value={s.toISOString()} defaultChecked={i === 0} /> {when(s)}
+                {d.slots.map((s, i) => (
+                  <label key={s.startsAt}>
+                    <input type="radio" name="slot" value={s.startsAt} defaultChecked={i === 0} /> {slotLabel(s.startsAt)}
+                    {s.id === "requested" && <span className="badge">Homeowner&apos;s pick</span>}
                   </label>
                 ))}
               </fieldset>
               <label>
-                Price (USD, {usd(range.low)}–{usd(range.high)})
-                <input type="number" name="price" min={range.low} max={range.high} step="1" defaultValue={range.price} required />
+                Price (USD, {priceRange(quote.low, quote.high)})
+                <input type="number" name="price" min={quote.low} max={quote.high} step="1" defaultValue={quote.price} required />
               </label>
-              <div className="row">
-                <button className="btn primary">Confirm booking</button>
-                {job.status === "agent_review" && (
-                  <button className="btn" formAction={virtualCall} formNoValidate>
-                    Book a virtual call instead
-                  </button>
-                )}
-              </div>
+              <button className="btn primary">Confirm booking</button>
             </form>
           </details>
           <details>
@@ -304,10 +305,18 @@ function SpecDetail({ job, pro, tab }: { job: ProJob; pro: Pro; tab: Tab }) {
             <form action={askMore} className="panel">
               {hidden}
               <fieldset>
-                <legend>Shots to retake or add</legend>
-                {SHOT_SUGGESTIONS.map((s) => (
-                  <label key={s}>
-                    <input type="checkbox" name="shots" value={s} /> {s}
+                <legend>Photos to retake or add</legend>
+                {template.required_shots.map((s) => (
+                  <label key={s.id}>
+                    <input type="checkbox" name="shots" value={s.id} /> {s.prompt}
+                  </label>
+                ))}
+              </fieldset>
+              <fieldset>
+                <legend>Questions to ask again</legend>
+                {template.questions.map((x) => (
+                  <label key={x.id}>
+                    <input type="checkbox" name="questions" value={x.id} /> {x.q}
                   </label>
                 ))}
               </fieldset>
@@ -318,38 +327,45 @@ function SpecDetail({ job, pro, tab }: { job: ProJob; pro: Pro; tab: Tab }) {
               <button className="btn primary">Send to homeowner</button>
             </form>
           </details>
-          <form action={decline}>
-            {hidden}
-            <button className="btn ghost">Decline</button>
-          </form>
+          {status === "handoff" ? (
+            <form action={virtualCall}>
+              {hidden}
+              <button className="btn">Route to a virtual call</button>
+            </form>
+          ) : (
+            <form action={decline}>
+              {hidden}
+              <button className="btn ghost">Decline</button>
+            </form>
+          )}
         </div>
       )}
 
-      {mine && STEPS.includes(job.status as (typeof STEPS)[number]) && (
+      {mine && (status === "accepted" || status === "en_route" || status === "done") && (
         <div className="active">
           <ol className="stepper">
-            {STEPS.map((s, i) => (
-              <li key={s} className={i <= STEPS.indexOf(job.status as (typeof STEPS)[number]) ? "on" : ""}>
-                {STATUS_LABELS[s]}
+            {steps.map((s, i) => (
+              <li key={s} className={i <= (steps as readonly string[]).indexOf(status) ? "on" : ""}>
+                {JOB_STATUS_LABELS[s]}
               </li>
             ))}
           </ol>
           {job.slot && (
             <p>
-              {job.virtualCall ? "Virtual call" : "Visit"}: <strong>{when(job.slot)}</strong>
-              {!job.virtualCall && <> · {job.address}</>}
+              {job.mode === "virtual" ? "Virtual call" : "Visit"}: <strong>{when(job.slot)}</strong>
+              {job.mode !== "virtual" && <> · {d.home.address}</>}
               {" · "}
-              <a href={googleCalendarUrl(job, job.slot, pro.profile.businessName ?? pro.user.name)} target="_blank" rel="noreferrer">
+              <a href={googleCalendarUrl(d, p.name)} target="_blank" rel="noreferrer">
                 Add to Google Calendar
               </a>
             </p>
           )}
-          <Customer job={job} />
-          {NEXT[job.status] && (
+          {job.rating != null && <p>Homeowner rated this {"★".repeat(job.rating)}</p>}
+          {next && (
             <form action={advance}>
               {hidden}
-              <input type="hidden" name="to" value={NEXT[job.status].to} />
-              <button className="btn primary">{NEXT[job.status].label}</button>
+              <input type="hidden" name="to" value={next} />
+              <button className="btn primary">{next === "en_route" ? "On my way" : "Mark done"}</button>
             </form>
           )}
         </div>
@@ -358,22 +374,26 @@ function SpecDetail({ job, pro, tab }: { job: ProJob; pro: Pro; tab: Tab }) {
   );
 }
 
-function Customer({ job }: { job: ProJob }) {
-  const c = customerOf(job);
-  if (!c) return null;
-  return (
-    <p className="muted">
-      Homeowner: {c.name}
-      {c.phone && <> · {c.phone}</>}
-    </p>
-  );
+/** A prefilled "add to Google Calendar" link. No OAuth needed. */
+function googleCalendarUrl(d: ProJobDetail, providerName: string) {
+  const fmt = (x: Date) => x.toISOString().replace(/[-:]|\.\d{3}/g, "");
+  const start = new Date(d.job.slot!);
+  const end = new Date(start.getTime() + 2 * 60 * 60 * 1000);
+  const params = new URLSearchParams({
+    action: "TEMPLATE",
+    text: `${providerName}: ${d.spec.title}`,
+    dates: `${fmt(start)}/${fmt(end)}`,
+    details: `Scope job #${d.job.id}\n\n${d.spec.summary}`,
+    location: d.job.mode === "virtual" ? "Virtual call" : d.home.address,
+  });
+  return `https://calendar.google.com/calendar/render?${params}`;
 }
 
-function RateCard({ pro, saved }: { pro: Pro; saved: boolean }) {
-  const c = pro.card;
+function RateCard({ p, saved }: { p: Provider; saved: boolean }) {
+  const c = p.rateCard;
   return (
     <form action={saveRates} className="card narrow-card">
-      <input type="hidden" name="provider" value={pro.user.id} />
+      <input type="hidden" name="provider" value={p.id} />
       <h2>Rate card</h2>
       <p className="muted">Prices = (base + per m² × area) × severity multiplier, shown as a ±15% range. Saving re-prices every spec in your queue.</p>
       <div className="grid2">
@@ -391,8 +411,8 @@ function RateCard({ pro, saved }: { pro: Pro; saved: boolean }) {
         <div className="grid5">
           {[1, 2, 3, 4, 5].map((s) => (
             <label key={s}>
-              Severity {s}
-              <input type="number" name={`m${s}`} min={0} step="any" defaultValue={c.severity_multiplier[s - 1] ?? 1} required />
+              {SEVERITY_LABELS[s]} ({s})
+              <input type="number" name={`m${s}`} min={0} max={20} step="any" defaultValue={c.severity_multiplier[s - 1] ?? 1} required />
             </label>
           ))}
         </div>

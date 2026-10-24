@@ -1,6 +1,6 @@
 // Shapes of the JSON the API returns. Shared by the server and the Expo app.
 // Dates arrive as ISO strings because they go through JSON.
-import type { IntakeStep, JobReport, MoreInfoRequest, Trade } from "./types";
+import type { IntakeStep, JobReport, Trade } from "./types";
 
 export type Role = "customer" | "provider" | "agent";
 
@@ -9,7 +9,6 @@ export type JobStatus =
   | "report_ready"
   | "open"
   | "agent_review"
-  | "more_info"
   | "assigned"
   | "en_route"
   | "in_progress"
@@ -32,10 +31,6 @@ export type Job = {
   providerId: number | null;
   agentId: number | null;
   route: "open" | "agent" | null;
-  slot: string | null;
-  price: number | null;
-  virtualCall: boolean;
-  moreInfo: MoreInfoRequest | null;
   createdAt: string;
   updatedAt: string;
 };

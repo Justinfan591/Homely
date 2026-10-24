@@ -100,11 +100,6 @@ export const INTAKE_TOOLS: Tool[] = [
             },
             photo_ids_referenced: { type: "array", items: { type: "integer" } },
             confidence: { type: "string", enum: ["low", "medium", "high"] },
-            severity: { type: "integer", enum: [1, 2, 3, 4, 5], description: "1 = cosmetic, 5 = severe or spreading." },
-            affected_area_m2: {
-              anyOf: [{ type: "number" }, { type: "null" }],
-              description: "Visible affected area in square metres, estimated from the photos. null if it doesn't apply (e.g. a leaking pipe).",
-            },
           },
           required: [
             "title",
@@ -122,8 +117,6 @@ export const INTAKE_TOOLS: Tool[] = [
             "customer_answers",
             "photo_ids_referenced",
             "confidence",
-            "severity",
-            "affected_area_m2",
           ],
           additionalProperties: false,
         },

@@ -1,6 +1,5 @@
 import { sqliteTable, text, integer, real } from "drizzle-orm/sqlite-core";
-import type { JobReport, MoreInfoRequest as JobMoreInfo } from "@/shared/types";
-import type { RateCard as JobRateCard } from "@/lib/pricing";
+import type { JobReport } from "@/shared/types";
 import type { MoreInfoRequest, RateCard } from "../shared/scope";
 import { JOB_STATUSES as SCOPE_JOB_STATUSES, SCAN_STATUSES } from "../shared/scope";
 
@@ -27,8 +26,6 @@ export const providerProfiles = sqliteTable("provider_profiles", {
   ratingAvg: real("rating_avg").notNull().default(5),
   jobsDone: integer("jobs_done").notNull().default(0),
   active: integer("active", { mode: "boolean" }).notNull().default(true),
-  // Null means DEFAULT_RATE_CARD.
-  rateCard: text("rate_card", { mode: "json" }).$type<JobRateCard>(),
 });
 
 export const JOB_STATUSES = [
@@ -36,7 +33,6 @@ export const JOB_STATUSES = [
   "report_ready",
   "open",
   "agent_review",
-  "more_info",
   "assigned",
   "en_route",
   "in_progress",
@@ -60,12 +56,6 @@ export const jobs = sqliteTable("jobs", {
   providerId: integer("provider_id").references(() => users.id),
   agentId: integer("agent_id").references(() => users.id),
   route: text("route", { enum: ["open", "agent"] }),
-  // Set when a provider accepts from the /pro dashboard.
-  slot: integer("slot", { mode: "timestamp" }),
-  price: real("price"),
-  virtualCall: integer("virtual_call", { mode: "boolean" }).notNull().default(false),
-  declinedBy: text("declined_by", { mode: "json" }).$type<number[]>().notNull().default([]),
-  moreInfo: text("more_info", { mode: "json" }).$type<JobMoreInfo>(),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().$defaultFn(now),
   updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().$defaultFn(now),
 });

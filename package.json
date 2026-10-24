@@ -13,7 +13,6 @@
     "db:push": "drizzle-kit push",
     "db:seed": "tsx db/seed.ts",
     "setup": "npm run db:push && npm run db:seed",
-    "e2e": "tsx scripts/e2e.ts",
     "mobile": "cd mobile && npx expo start"
   },
   "dependencies": {
