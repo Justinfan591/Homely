@@ -8,6 +8,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { eq, inArray } from "drizzle-orm";
 import { db, schema } from "@/db";
+import { ApiError } from "../mobile/src/services/api";
 import { createHttpApi } from "../mobile/src/services/http";
 import type { Job, SpecOutcome } from "../mobile/src/domain/types";
 
@@ -235,6 +236,20 @@ async function main() {
     const p = await scanAndEstimate("plumbing_sink", ["faucet_top"], { leak_rate: "Slow drip", water_off: "Yes" });
     assert.ok(p.outcome.kind === "match" && p.outcome.spec.fields.some((x) => x.label === "Leak location"));
     ok(`plumbing spec: "${p.outcome.spec.title}"; optional "age" question left blank`);
+
+    step("App restarted between the questions and the estimate → back to the questions");
+    const fresh = createHttpApi({ baseUrl: BASE, preparePhoto: async () => new Blob([fs.readFileSync(path.join(FIX, "wall.png"))], { type: "image/png" }) });
+    const lost = await fresh.createScan(home.id, "mold");
+    created.add(Number(lost.id));
+    for (const shot of lost.pendingShotIds) assert.equal((await fresh.submitPhoto(lost.id, shot, "wall.png")).ok, true);
+    await fresh.submitAnswers(lost.id, { duration: "Months", smell: "Yes", leak: "No" }, "");
+    // A new client instance has no answers in memory, like the app after a restart.
+    const restarted = createHttpApi({ baseUrl: BASE, preparePhoto: async () => new Blob([]) });
+    await assert.rejects(restarted.getSpecOutcome(lost.id), (e: unknown) => e instanceof ApiError && e.code === "needs_answers");
+    ok("estimate asks for the answers again instead of failing");
+    await restarted.submitAnswers(lost.id, { duration: "Months", smell: "Yes", leak: "No" }, "");
+    assert.equal((await restarted.getSpecOutcome(lost.id)).kind, "match");
+    ok("answering again gives the estimate");
 
     step("Rate card re-prices the queue");
     const r = await scanAndEstimate("mold");
