@@ -1,0 +1,20 @@
+{
+  "trade": "plumbing_sink",
+  "title": "Sink or pipe leak",
+  "blurb": "Dripping, slow drains or damp cabinets",
+  "icon": "tool",
+  "areaLabel": "Wet area",
+  "required_shots": [
+    { "id": "wide_sink", "prompt": "Show the whole sink area", "tip": "Include the counter, faucet and cabinet." },
+    { "id": "under_sink", "prompt": "Open the cabinet and look underneath", "tip": "Use your phone light if it's dark under there.", "skip_label": "No cabinet underneath" },
+    { "id": "closeup_leak", "prompt": "Get close to where it's leaking", "tip": "Focus on the drip, stain or wet spot." },
+    { "id": "shutoff_valve", "prompt": "Can you see the shut-off valves?", "tip": "They're usually on the pipes on the wall.", "skip_label": "Can't find them" }
+  ],
+  "questions": [
+    { "id": "when", "q": "When does it leak?", "options": ["Only when in use", "Constantly", "Not sure"] },
+    { "id": "water_off", "q": "Have you turned the water off?", "options": ["Yes", "No"] },
+    { "id": "damage", "q": "Any damage to the cabinet or floor?", "options": ["Yes", "No", "Not sure"] }
+  ],
+  "notes_prompt": "Anything else a pro should know?",
+  "outputs": ["affected_area_m2", "severity", "likely_leak_source", "recommended_service"]
+}

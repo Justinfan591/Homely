@@ -1,37 +1,48 @@
-import { Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_700Bold, useFonts } from "@expo-google-fonts/inter";
+import {
+  Inter_400Regular,
+  Inter_500Medium,
+  Inter_600SemiBold,
+  Inter_700Bold,
+  useFonts,
+} from "@expo-google-fonts/inter";
 import { Stack } from "expo-router";
+import * as SplashScreen from "expo-splash-screen";
 import { StatusBar } from "expo-status-bar";
-import { View } from "react-native";
+import { useEffect } from "react";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { SWRConfig } from "swr";
-import { Spinner } from "@/components/ui";
-import { fetcher } from "@/lib/api";
-import { AuthProvider, useAuth } from "@/lib/auth";
-import { colors } from "@/lib/theme";
+import { HomeProvider } from "@/hooks/home";
+import { colors } from "@/theme";
 
-function RootStack() {
-  const { loading } = useAuth();
-  const [fontsLoaded, fontError] = useFonts({ Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_700Bold });
-  // If the font fails to load, carry on with the system font.
-  if (loading || (!fontsLoaded && !fontError)) {
-    return (
-      <View style={{ flex: 1, justifyContent: "center", backgroundColor: colors.bg }}>
-        <Spinner />
-      </View>
-    );
-  }
-  return <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.bg } }} />;
-}
+SplashScreen.preventAutoHideAsync().catch(() => {});
 
 export default function RootLayout() {
+  const [loaded] = useFonts({ Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_700Bold });
+  useEffect(() => {
+    if (loaded) SplashScreen.hideAsync().catch(() => {});
+  }, [loaded]);
+  if (!loaded) return null;
+
   return (
-    <SafeAreaProvider>
-      <SWRConfig value={{ fetcher, revalidateOnFocus: true }}>
-        <AuthProvider>
-          <StatusBar style="dark" />
-          <RootStack />
-        </AuthProvider>
-      </SWRConfig>
-    </SafeAreaProvider>
+    <GestureHandlerRootView style={{ flex: 1, backgroundColor: colors.bg }}>
+      <SafeAreaProvider>
+        <SWRConfig value={{ dedupingInterval: 0, errorRetryCount: 2 }}>
+          <HomeProvider>
+            <StatusBar style="dark" />
+            <Stack
+              screenOptions={{
+                headerShown: false,
+                contentStyle: { backgroundColor: colors.bg },
+                animation: "slide_from_right",
+              }}
+            >
+              <Stack.Screen name="index" />
+              <Stack.Screen name="scan/[scanId]" options={{ animation: "fade", gestureEnabled: false }} />
+            </Stack>
+          </HomeProvider>
+        </SWRConfig>
+      </SafeAreaProvider>
+    </GestureHandlerRootView>
   );
 }
