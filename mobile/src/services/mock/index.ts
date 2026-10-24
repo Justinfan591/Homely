@@ -82,13 +82,13 @@ function hash(s: string) {
 }
 
 function buildSpec(scan: Scan): JobSpec {
+  const t = getTemplate(scan.trade);
   const a = scan.answers;
-  const idx = (qid: string) => getTemplate(scan.trade).questions.find((q) => q.id === qid)!.options.indexOf(a[qid]);
+  const idx = (qid: string) => t.questions.find((q) => q.id === qid)?.options.indexOf(a[qid]) ?? -1;
   let severity: number;
   let title: string;
   let summary: string;
-  let moistureSource: string;
-  let recommendedService: string;
+  let fields: Record<string, string>;
 
   if (scan.trade === "mold") {
     severity = 1 + Math.max(0, idx("duration")) + (a.smell === "Yes" ? 1 : 0) + (a.leak === "Yes" ? 1 : 0);
@@ -96,26 +96,30 @@ function buildSpec(scan: Scan): JobSpec {
     summary =
       `Dark patches that look like surface growth. ${a.duration === "Months" ? "Reported as visible for months. " : ""}` +
       `${a.smell === "Yes" ? "A musty smell was reported. " : ""}Testing is recommended to confirm.`;
-    moistureSource =
-      a.leak === "Yes"
-        ? "A recent leak or flooding was reported"
-        : scan.skipped.includes("likely_water_source")
-          ? "Not clear from the photos"
-          : "Possible condensation near a window, pipe or vent";
-    recommendedService =
-      severity <= 2
-        ? "Virtual assessment and surface treatment"
-        : severity === 3
-          ? "On-site inspection and moisture testing"
-          : "On-site testing and a remediation plan";
+    fields = {
+      likely_moisture_source:
+        a.leak === "Yes"
+          ? "A recent leak or flooding was reported"
+          : scan.skipped.includes("likely_water_source")
+            ? "Not clear from the photos"
+            : "Possible condensation near a window, pipe or vent",
+      recommended_service:
+        severity <= 2
+          ? "Virtual assessment and surface treatment"
+          : severity === 3
+            ? "On-site inspection and moisture testing"
+            : "On-site testing and a remediation plan",
+    };
   } else {
-    severity = 1 + (a.when === "Constantly" ? 2 : a.when ? 1 : 0) + (a.damage === "Yes" ? 2 : a.damage === "Not sure" ? 1 : 0);
+    // leak_rate options run from "Slow drip" to "Constant flow".
+    severity = 1 + Math.max(0, idx("leak_rate")) + (a.water_off === "No" ? 1 : 0);
     title = "Likely leak at the sink";
-    summary = `Moisture is visible around the sink plumbing. ${
-      a.damage === "Yes" ? "Damage to the cabinet or floor was reported. " : ""
-    }A plumber will confirm the source.`;
-    moistureSource = "Visible moisture near the drain connection";
-    recommendedService = severity <= 2 ? "Leak inspection and minor repair" : "Leak inspection and repair";
+    summary = `Moisture is visible around the sink plumbing. ${a.leak_rate ? `Reported as: ${a.leak_rate.toLowerCase()}. ` : ""}A plumber will confirm the source.`;
+    fields = {
+      leak_location: scan.skipped.includes("faucet_top") ? "Under the sink" : "Under the sink or at the faucet",
+      likely_cause: "Loose or worn connection",
+      recommended_service: severity <= 2 ? "Leak inspection and minor repair" : "Leak inspection and repair",
+    };
   }
   severity = Math.min(5, Math.max(1, severity));
 
@@ -135,8 +139,7 @@ function buildSpec(scan: Scan): JobSpec {
     severity: severity as JobSpec["severity"],
     areaM2,
     confidence: Math.round(confidence * 100) / 100,
-    moistureSource,
-    recommendedService,
+    fields: Object.entries(fields).map(([k, value]) => ({ label: t.outputLabels[k] ?? k, value })),
     createdAt: new Date().toISOString(),
   };
 }
@@ -189,7 +192,7 @@ export const mockApi: ScopeApi = {
         if (job) {
           const j = advance(job);
           const status: RecordItem["status"] =
-            j.status === "pending" ? "awaiting" : j.status === "accepted" ? "scheduled" : j.status;
+            j.status === "pending" ? "awaiting" : j.status === "accepted" ? "scheduled" : j.status === "more_info" ? "needs_info" : j.status;
           items.push({ ...base, status, price: j.price, href: `/track/${j.id}` });
         } else if (scan.followUp && scan.pendingShotIds.length) {
           items.push({ ...base, status: "needs_info", price: null, href: `/scan/${scan.id}`, followUp: scan.followUp });
@@ -230,7 +233,7 @@ export const mockApi: ScopeApi = {
       const key = `${scanId}:${shotId}`;
       const n = (attempts.get(key) ?? 0) + 1;
       attempts.set(key, n);
-      if (mockConfig.rejectFirstCloseup && shotId.startsWith("closeup") && n === 1) {
+      if (mockConfig.rejectFirstCloseup && shotId.includes("closeup") && n === 1) {
         retakes.set(scanId, (retakes.get(scanId) ?? 0) + 1);
         return { ok: false, reason: "blurry", message: "That one's a little blurry. Hold steady and tap again." };
       }
@@ -315,7 +318,7 @@ export const mockApi: ScopeApi = {
         providerRating: option.provider.rating,
         status: "pending",
         slot,
-        price: priceRange(option.provider.rateCard, outcome.spec.areaM2, outcome.spec.severity),
+        price: priceRange(need(providers.find((p) => p.id === option.provider.id), "Provider").rateCard, outcome.spec.areaM2, outcome.spec.severity),
         etaMinutes: null,
         rating: null,
         createdAt: new Date().toISOString(),
@@ -356,6 +359,45 @@ export const mockApi: ScopeApi = {
     }),
 
   getJob: (jobId) => call("getJob", 120, () => advance(need(jobs.get(jobId), "Job"))),
+
+  askForHuman: (scanId) =>
+    call("askForHuman", 600, (): SpecOutcome => {
+      const outcome = need(outcomes.get(scanId), "Estimate");
+      const scan = need(scans.get(scanId), "Scan");
+      if (!jobForScan(scanId)) {
+        const jobId = id("job");
+        jobs.set(jobId, {
+          id: jobId,
+          specId: outcome.spec.id,
+          scanId,
+          homeId: scan.homeId,
+          providerName: scan.trade === "mold" ? "Mold Busters" : "Scope",
+          providerRating: null,
+          status: "handoff",
+          slot: null,
+          price: null,
+          etaMinutes: null,
+          rating: null,
+          createdAt: new Date().toISOString(),
+          virtual: false,
+        });
+      }
+      const next: SpecOutcome = { kind: "handoff", spec: outcome.spec };
+      outcomes.set(scanId, next);
+      return next;
+    }),
+
+  cancelJob: (jobId) =>
+    call("cancelJob", 400, () => {
+      const job = need(jobs.get(jobId), "Job");
+      if (!["pending", "handoff", "more_info", "declined"].includes(job.status)) {
+        throw new ApiError("This job can't be cancelled now. Contact the pro.", "rejected");
+      }
+      const next: Job = { ...job, status: "cancelled" };
+      jobs.set(jobId, next);
+      simulated.delete(jobId);
+      return next;
+    }),
 
   rateJob: (jobId, stars) =>
     call("rateJob", 500, () => {

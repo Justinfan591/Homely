@@ -71,9 +71,16 @@ export default function ScanScreen() {
   const flashStyle = useAnimatedStyle(() => ({ opacity: flash.value }));
 
   function finish() {
+    // A pro's follow-up may ask questions again; otherwise answers from the first pass are kept.
+    const askAgain = !!scan?.followUp?.questionIds?.length;
     const hasAnswers = scan && Object.keys(scan.answers).length > 0;
-    router.replace(hasAnswers ? `/spec/${scanId}` : `/clarify/${scanId}`);
+    router.replace(hasAnswers && !askAgain ? `/spec/${scanId}` : `/clarify/${scanId}`);
   }
+
+  // Nothing to photograph (e.g. the pro only asked a question): go straight on.
+  useEffect(() => {
+    if (scan && template && ready && shots.length === 0) finish();
+  }, [scan, template, ready, shots.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function advance() {
     if (index + 1 >= shots.length) finish();

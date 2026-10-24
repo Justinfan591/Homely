@@ -80,10 +80,10 @@ export const seedScans: Scan[] = [
     id: "scan_followup",
     homeId: "home_lakeview",
     trade: "plumbing_sink",
-    photos: ["wide_sink", "under_sink", "closeup_leak"].map((shotId) => ({ shotId, uri: "", ok: true })),
+    photos: ["under_sink_wide", "leak_closeup", "faucet_top"].map((shotId) => ({ shotId, uri: "", ok: true })),
     skipped: [],
-    pendingShotIds: ["shutoff_valve"],
-    answers: { when: "Only when in use", water_off: "No", damage: "Not sure" },
+    pendingShotIds: ["shutoff_valves"],
+    answers: { leak_rate: "Slow drip", water_off: "No", age: "Not sure" },
     note: "",
     createdAt: daysAgo(1),
     followUp: {
@@ -103,8 +103,10 @@ export const seedSpecs: JobSpec[] = [
     severity: 3,
     areaM2: 1.6,
     confidence: 0.86,
-    moistureSource: "Possible condensation near the window",
-    recommendedService: "On-site inspection and moisture testing",
+    fields: [
+      { label: "Likely moisture source", value: "Possible condensation near the window" },
+      { label: "Recommended service", value: "On-site inspection and moisture testing" },
+    ],
     createdAt: daysAgo(34),
   },
   {
@@ -116,8 +118,10 @@ export const seedSpecs: JobSpec[] = [
     severity: 2,
     areaM2: 0.4,
     confidence: 0.78,
-    moistureSource: "Visible moisture near the drain connection",
-    recommendedService: "Leak inspection and repair",
+    fields: [
+      { label: "Leak location", value: "Drain connection under the sink" },
+      { label: "Recommended service", value: "Leak inspection and repair" },
+    ],
     createdAt: daysAgo(1),
   },
 ];

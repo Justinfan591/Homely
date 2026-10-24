@@ -27,8 +27,110 @@ export default function Track() {
     );
   }
   if (!job) return <Screen close onBack={() => goHome()}><View /></Screen>;
-  if (job.status === "handoff") return <InReview job={job} />;
-  return <Progress job={job} onRated={() => mutate()} />;
+  const refresh = () => void mutate();
+  if (job.status === "handoff") return <InReview job={job} onChange={refresh} />;
+  if (job.status === "more_info") return <MoreInfo job={job} onChange={refresh} />;
+  if (job.status === "declined") return <Declined job={job} onChange={refresh} />;
+  if (job.status === "cancelled") return <Cancelled job={job} />;
+  return <Progress job={job} onRated={refresh} />;
+}
+
+/** "Cancel request", with a second tap to confirm (no native dialogs, so it works on web too). */
+function CancelLink({ job, onDone }: { job: Job; onDone: () => void }) {
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function cancel() {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.cancelJob(job.id);
+      onDone();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't cancel. Try again.");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      {error ? (
+        <Text variant="caption" tone="danger" style={{ textAlign: "center" }} accessibilityRole="alert">
+          {error}
+        </Text>
+      ) : null}
+      <Button
+        label={confirming ? "Yes, cancel this request" : "Cancel request"}
+        variant={confirming ? "danger" : "ghost"}
+        compact
+        loading={busy}
+        onPress={() => (confirming ? cancel() : setConfirming(true))}
+      />
+    </>
+  );
+}
+
+function MoreInfo({ job, onChange }: { job: Job; onChange: () => void }) {
+  return (
+    <Screen
+      close
+      onBack={() => goHome()}
+      footer={
+        <>
+          <Button label="Add what they asked for" icon="camera" onPress={() => router.push(`/scan/${job.scanId}`)} />
+          <CancelLink job={job} onDone={onChange} />
+        </>
+      }
+    >
+      <View style={styles.reviewBadge}>
+        <Icon name="camera" size={26} color={colors.accent} />
+      </View>
+      <Text variant="title" style={{ marginTop: 20 }}>
+        {job.providerName} needs a bit more
+      </Text>
+      <Text tone="soft" style={{ marginTop: 8 }}>
+        {job.followUp?.message || "They'd like a few more photos or answers before confirming."} It only takes a minute, and your
+        updated scope goes straight back to them.
+      </Text>
+    </Screen>
+  );
+}
+
+function Declined({ job, onChange }: { job: Job; onChange: () => void }) {
+  return (
+    <Screen
+      close
+      onBack={() => goHome()}
+      footer={
+        <>
+          <Button label="See other pros" onPress={() => router.replace(`/spec/${job.scanId}`)} />
+          <CancelLink job={job} onDone={onChange} />
+        </>
+      }
+    >
+      <View style={[styles.reviewBadge, { backgroundColor: colors.fill }]}>
+        <Icon name="calendar" size={26} />
+      </View>
+      <Text variant="title" style={{ marginTop: 20 }}>
+        {job.providerName} can't take this one
+      </Text>
+      <Text tone="soft" style={{ marginTop: 8 }}>
+        Your scope is saved. Pick another pro nearby, or book a virtual call if nobody else is in range.
+      </Text>
+    </Screen>
+  );
+}
+
+function Cancelled({ job }: { job: Job }) {
+  return (
+    <Screen close onBack={() => goHome()} footer={<Button label="Back to home" onPress={() => goHome()} />}>
+      <Text variant="title">Request cancelled</Text>
+      <Text tone="soft" style={{ marginTop: 8 }}>
+        {job.providerName} won't come out for this. Your photos stay in your home record.
+      </Text>
+    </Screen>
+  );
 }
 
 function Progress({ job, onRated }: { job: Job; onRated: () => void }) {
@@ -82,7 +184,9 @@ function Progress({ job, onRated }: { job: Job; onRated: () => void }) {
       ? `${job.providerName} is on the way to you now.`
       : job.status === "accepted"
         ? `${job.slot?.label ?? ""}. We'll let you know when they're on the way.`
-        : "They've received your scope and will confirm shortly.";
+        : job.slot
+          ? `You asked for ${job.slot.label}. They'll confirm the time shortly.`
+          : "They've received your scope and will confirm shortly.";
 
   return (
     <Screen
@@ -99,7 +203,10 @@ function Progress({ job, onRated }: { job: Job; onRated: () => void }) {
             <Button label="Submit rating" onPress={rate} disabled={!stars} loading={saving} />
           </>
         ) : (
-          <Button label="Back to home" variant={done ? "primary" : "secondary"} onPress={() => goHome()} />
+          <>
+            <Button label="Back to home" variant={done ? "primary" : "secondary"} onPress={() => goHome()} />
+            {job.status === "pending" ? <CancelLink job={job} onDone={onRated} /> : null}
+          </>
         )
       }
     >
@@ -133,9 +240,14 @@ function Progress({ job, onRated }: { job: Job; onRated: () => void }) {
           </View>
         </View>
         <View style={styles.rule} />
-        {job.slot ? <Row label={job.virtual ? "Call" : "Arrival window"} value={job.slot.label || shortDate(job.slot.start)} /> : null}
+        {job.slot ? (
+          <Row
+            label={job.slotConfirmed === false ? "Requested time" : job.virtual ? "Call" : "Arrival window"}
+            value={job.slot.label || shortDate(job.slot.start)}
+          />
+        ) : null}
         {job.price ? (
-          <Row label="Estimate" value={moneyRange(job.price)} />
+          <Row label={job.price.low === job.price.high ? "Confirmed price" : "Estimate"} value={moneyRange(job.price)} />
         ) : job.virtual ? (
           <Row label="Pricing" value="Confirmed on the call" />
         ) : null}
@@ -149,9 +261,18 @@ function Progress({ job, onRated }: { job: Job; onRated: () => void }) {
   );
 }
 
-function InReview({ job }: { job: Job }) {
+function InReview({ job, onChange }: { job: Job; onChange: () => void }) {
   return (
-    <Screen close onBack={() => goHome()} footer={<Button label="Back to home" onPress={() => goHome()} />}>
+    <Screen
+      close
+      onBack={() => goHome()}
+      footer={
+        <>
+          <Button label="Back to home" onPress={() => goHome()} />
+          <CancelLink job={job} onDone={onChange} />
+        </>
+      }
+    >
       <View style={styles.reviewBadge}>
         <Icon name="user" size={26} color={colors.accent} />
       </View>

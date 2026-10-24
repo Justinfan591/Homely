@@ -12,12 +12,14 @@ import { Text } from "./Text";
 
 const STATUS: Record<RecordStatus, { label: string; tone: "neutral" | "accent" | "success" | "warn" }> = {
   in_progress: { label: "Draft", tone: "neutral" },
-  needs_info: { label: "Needs a photo", tone: "accent" },
+  needs_info: { label: "Pro needs more", tone: "accent" },
   awaiting: { label: "Awaiting confirmation", tone: "warn" },
   scheduled: { label: "Scheduled", tone: "accent" },
   en_route: { label: "On the way", tone: "accent" },
   done: { label: "Completed", tone: "success" },
   handoff: { label: "In review", tone: "neutral" },
+  declined: { label: "Pick another pro", tone: "warn" },
+  cancelled: { label: "Cancelled", tone: "neutral" },
 };
 
 export function RecordRow({ item }: { item: RecordItem }) {

@@ -13,7 +13,8 @@ export const useScan = (scanId: string) => useSWR(["scan", scanId], () => api.ge
 /** Polls every 2s until the job is finished. */
 export const useJob = (jobId: string) =>
   useSWR(["job", jobId], () => api.getJob(jobId), {
-    refreshInterval: (job) => (job?.status === "done" || job?.status === "handoff" ? 0 : 2000),
+    // A handoff can still be picked up by a pro, so only stop once it's finished.
+    refreshInterval: (job) => ((job?.status === "done" && job.rating != null) || job?.status === "cancelled" ? 0 : 2000),
   });
 
 export const useSpecOutcome = (scanId: string) =>

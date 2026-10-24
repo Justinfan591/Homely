@@ -6,11 +6,16 @@
     "paths": {
       "@/*": [
         "./src/*"
+      ],
+      "@shared/*": [
+        "../shared/*"
       ]
     }
   },
   "include": [
     "**/*.ts",
-    "**/*.tsx"
+    "**/*.tsx",
+    "../shared/scope.ts",
+    "../shared/scope-client.ts"
   ]
 }

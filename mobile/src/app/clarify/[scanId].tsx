@@ -22,7 +22,9 @@ export default function Clarify() {
   const [submitError, setSubmitError] = useState<string | null>(null);
 
   const template = scan ? getTemplate(scan.trade) : undefined;
-  const complete = !!template && template.questions.every((q) => answers[q.id]);
+  const followUp = scan?.followUp;
+  const questions = template?.questions.filter((q) => !followUp || followUp.questionIds?.includes(q.id)) ?? [];
+  const complete = !!template && questions.every((q) => q.optional || answers[q.id]);
 
   async function submit() {
     setSubmitting(true);
@@ -50,9 +52,9 @@ export default function Clarify() {
         </>
       }
     >
-      <Text variant="title">A few quick questions</Text>
+      <Text variant="title">{followUp ? `${followUp.provider} has a question` : "A few quick questions"}</Text>
       <Text tone="soft" style={{ marginTop: 8 }}>
-        Tap to answer. This helps us size the job.
+        {followUp?.message || "Tap to answer. This helps us size the job."}
       </Text>
 
       {error ? (
@@ -65,9 +67,12 @@ export default function Clarify() {
         </View>
       ) : (
         <View style={{ gap: 32, marginTop: 32 }}>
-          {template.questions.map((q) => (
+          {questions.map((q) => (
             <View key={q.id} style={{ gap: 14 }}>
-              <Text variant="heading">{q.q}</Text>
+              <Text variant="heading">
+                {q.q}
+                {q.optional ? <Text tone="soft"> (optional)</Text> : null}
+              </Text>
               <View style={styles.chips} accessibilityRole="radiogroup">
                 {q.options.map((o) => (
                   <Chip

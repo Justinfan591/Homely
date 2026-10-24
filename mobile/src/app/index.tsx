@@ -104,7 +104,7 @@ export default function Home() {
               <Icon name="camera" size={18} color={colors.white} />
             </View>
             <View style={{ flex: 1 }}>
-              <Text variant="bodyStrong">{attention.followUp?.provider ?? "A pro"} needs one more photo</Text>
+              <Text variant="bodyStrong">{attention.followUp?.provider ?? "A pro"} needs a bit more</Text>
               <Text variant="caption" tone="soft" numberOfLines={2}>
                 {attention.followUp?.message}
               </Text>

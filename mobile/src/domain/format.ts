@@ -5,7 +5,7 @@ export function money(n: number) {
 }
 
 export function moneyRange(r: PriceRange) {
-  return `${money(r.low)}–${money(r.high)}`;
+  return r.low === r.high ? money(r.low) : `${money(r.low)}–${money(r.high)}`;
 }
 
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];

@@ -8,7 +8,7 @@ import type {
   Slot,
   SpecOutcome,
   TradeId,
-} from "@/domain/types";
+} from "../domain/types"; // relative: scripts/e2e.ts imports this from outside the app
 
 /** Every failure the UI needs to handle surfaces as an ApiError with a message safe to show. */
 export class ApiError extends Error {
@@ -47,4 +47,8 @@ export interface ScopeApi {
   /** Polled by the Track screen. */
   getJob(jobId: string): Promise<Job>;
   rateJob(jobId: string, stars: number): Promise<Job>;
+  /** "I'd rather talk to a person": send the spec to human review instead of booking. */
+  askForHuman(scanId: string): Promise<SpecOutcome>;
+  /** Homeowner cancels before the pro has accepted. */
+  cancelJob(jobId: string): Promise<Job>;
 }

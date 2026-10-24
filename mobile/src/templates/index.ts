@@ -1,39 +1,43 @@
 import type { TradeId, TradeTemplate } from "@/domain/types";
-import mold from "./mold.json";
-import plumbingSink from "./plumbing_sink.json";
+// One source of truth: the same /templates files the server validates and prompts with.
+import mold from "../../../templates/mold.json";
+import plumbingSink from "../../../templates/plumbing_sink.json";
 
 type RawTemplate = {
   trade: string;
-  title: string;
-  blurb: string;
-  icon: string;
-  areaLabel: string;
-  required_shots: { id: string; prompt: string; tip?: string; skip_label?: string }[];
-  questions: { id: string; q: string; options: string[] }[];
-  notes_prompt: string;
+  label: string;
+  description: string;
+  icon?: string;
+  area_label?: string;
+  required_shots: { id: string; prompt: string; tip?: string; optional?: boolean; skip_label?: string }[];
+  questions: { id: string; q: string; options: string[]; optional?: boolean }[];
+  notes?: { prompt: string };
   outputs: string[];
+  output_labels?: Record<string, string>;
 };
 
 function load(raw: RawTemplate): TradeTemplate {
   return {
     trade: raw.trade,
-    title: raw.title,
-    blurb: raw.blurb,
-    icon: raw.icon,
-    areaLabel: raw.areaLabel,
+    title: raw.label,
+    blurb: raw.description,
+    icon: raw.icon ?? "camera",
+    areaLabel: raw.area_label ?? "Affected area",
     requiredShots: raw.required_shots.map((s) => ({
       id: s.id,
       prompt: s.prompt,
       tip: s.tip,
-      skipLabel: s.skip_label,
+      // Only optional shots can be skipped; the server rejects the rest.
+      skipLabel: s.optional ? (s.skip_label ?? "Skip") : undefined,
     })),
-    questions: raw.questions,
-    notesPrompt: raw.notes_prompt,
+    questions: raw.questions.map((q) => ({ id: q.id, q: q.q, options: q.options, optional: q.optional ?? false })),
+    notesPrompt: raw.notes?.prompt ?? "Anything else a pro should know?",
     outputs: raw.outputs,
+    outputLabels: raw.output_labels ?? {},
   };
 }
 
-// Adding a trade = adding a JSON file and listing it here.
+// Adding a trade = adding a JSON file to /templates and listing it here.
 export const templates: TradeTemplate[] = [mold, plumbingSink].map(load);
 
 export function getTemplate(trade: TradeId): TradeTemplate {

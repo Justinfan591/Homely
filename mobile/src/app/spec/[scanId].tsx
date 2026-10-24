@@ -11,7 +11,7 @@ import { Sheet } from "@/components/Sheet";
 import { ErrorState } from "@/components/States";
 import { Text } from "@/components/Text";
 import { moneyRange, SEVERITY_LABELS } from "@/domain/format";
-import type { JobSpec, MatchOption, Scan, Slot } from "@/domain/types";
+import type { JobSpec, MatchOption, Scan, Slot, SpecOutcome } from "@/domain/types";
 import { useHome } from "@/hooks/home";
 import { useScan, useSpecOutcome } from "@/hooks/data";
 import { api } from "@/services";
@@ -36,7 +36,9 @@ export default function SpecScreen() {
 
   switch (outcome.kind) {
     case "match":
-      return <Match spec={outcome.spec} options={outcome.options} scan={scan} />;
+      return <Match spec={outcome.spec} options={outcome.options} scan={scan} onHuman={(next) => mutate(next, { revalidate: false })} />;
+    case "submitted":
+      return <Submitted jobId={outcome.jobId} />;
     case "handoff":
       return <Handoff spec={outcome.spec} />;
     case "no_provider":
@@ -97,8 +99,9 @@ function Facts({ spec }: { spec: JobSpec }) {
       </View>
       <View style={styles.rule} />
       <Fact label={t.areaLabel} value={`about ${spec.areaM2} m²`} />
-      <Fact label={t.trade === "mold" ? "Likely moisture source" : "Likely source"} value={spec.moistureSource} />
-      <Fact label="Recommended" value={spec.recommendedService} />
+      {spec.fields.map((f) => (
+        <Fact key={f.label} label={f.label} value={f.value} />
+      ))}
     </View>
   );
 }
@@ -128,7 +131,15 @@ function Photos({ scan }: { scan?: Scan }) {
   );
 }
 
-function Match({ spec, options, scan }: { spec: JobSpec; options: MatchOption[]; scan?: Scan }) {
+/** Already with a pro (e.g. after answering an "ask for more"): go to tracking. */
+function Submitted({ jobId }: { jobId: string }) {
+  useEffect(() => {
+    router.replace(`/track/${jobId}`);
+  }, [jobId]);
+  return <Analyzing />;
+}
+
+function Match({ spec, options, scan, onHuman }: { spec: JobSpec; options: MatchOption[]; scan?: Scan; onHuman: (o: SpecOutcome) => void }) {
   const [choice, setChoice] = useState({ provider: options[0].provider.id, slot: options[0].slots[0].id });
   const [sheet, setSheet] = useState(false);
   const [booking, setBooking] = useState(false);
@@ -136,6 +147,17 @@ function Match({ spec, options, scan }: { spec: JobSpec; options: MatchOption[];
 
   const option = options.find((o) => o.provider.id === choice.provider) ?? options[0];
   const slot = option.slots.find((s) => s.id === choice.slot) ?? option.slots[0];
+
+  async function human() {
+    setBooking(true);
+    setError(null);
+    try {
+      onHuman(await api.askForHuman(spec.scanId));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't reach a person. Try again.");
+      setBooking(false);
+    }
+  }
 
   async function book() {
     setBooking(true);
@@ -162,6 +184,7 @@ function Match({ spec, options, scan }: { spec: JobSpec; options: MatchOption[];
           ) : null}
           <Button label={`Book ${option.provider.name} · ${slot.label}`} onPress={book} loading={booking} />
           <Button label="See other options" variant="ghost" compact onPress={() => setSheet(true)} />
+          <Button label="Talk to a person instead" variant="ghost" compact onPress={human} disabled={booking} />
         </>
       }
     >
@@ -177,7 +200,7 @@ function Match({ spec, options, scan }: { spec: JobSpec; options: MatchOption[];
           {moneyRange(option.price)}
         </Text>
         <Text variant="caption" tone="soft" style={{ marginTop: 6 }}>
-          Estimate — confirmed by provider.
+          Estimate — confirmed by provider. You pick a time; {option.provider.name} confirms it.
         </Text>
       </View>
 

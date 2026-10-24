@@ -11,7 +11,7 @@ export type Shot = {
   skipLabel?: string;
 };
 
-export type Question = { id: string; q: string; options: string[] };
+export type Question = { id: string; q: string; options: string[]; optional?: boolean };
 
 export type TradeTemplate = {
   trade: TradeId;
@@ -25,6 +25,8 @@ export type TradeTemplate = {
   outputs: string[];
   /** Plain-language label for the measured quantity. */
   areaLabel: string;
+  /** Display names for the spec's output fields. */
+  outputLabels: Record<string, string>;
 };
 
 export type Photo = { shotId: string; uri: string; ok: boolean };
@@ -42,8 +44,11 @@ export type Scan = {
   note: string;
   createdAt: string;
   /** Set when a provider asked for more information. */
-  followUp?: { provider: string; message: string };
+  followUp?: FollowUp;
 };
+
+/** A provider's "ask for more": the shots go in pendingShotIds, the questions are listed here. */
+export type FollowUp = { provider: string; message: string; questionIds?: string[] };
 
 export type PhotoVerdict =
   | { ok: true; message: string }
@@ -58,8 +63,8 @@ export type JobSpec = {
   severity: 1 | 2 | 3 | 4 | 5;
   areaM2: number;
   confidence: number;
-  moistureSource: string;
-  recommendedService: string;
+  /** Trade-specific findings, e.g. "Likely moisture source", already labelled. */
+  fields: { label: string; value: string }[];
   createdAt: string;
 };
 
@@ -83,8 +88,11 @@ export type Provider = {
 
 export type Slot = { id: string; start: string; label: string };
 
+/** What the booking screens show about a pro. */
+export type ProviderSummary = Pick<Provider, "id" | "name" | "rating" | "reviews" | "etaMinutes">;
+
 export type MatchOption = {
-  provider: Provider;
+  provider: ProviderSummary;
   distanceKm: number;
   price: PriceRange;
   slots: Slot[];
@@ -92,7 +100,7 @@ export type MatchOption = {
 
 export type Home = { id: string; name: string; address: string; lat: number; lng: number };
 
-export type JobStatus = "pending" | "accepted" | "en_route" | "done" | "handoff";
+export type JobStatus = "pending" | "accepted" | "en_route" | "done" | "handoff" | "more_info" | "declined" | "cancelled";
 
 export type Job = {
   id: string;
@@ -102,7 +110,9 @@ export type Job = {
   providerName: string;
   providerRating: number | null;
   status: JobStatus;
+  /** Confirmed time once accepted; before that, the time the homeowner asked for. */
   slot: Slot | null;
+  slotConfirmed?: boolean;
   price: PriceRange | null;
   /** Minutes until arrival, when en route. */
   etaMinutes: number | null;
@@ -110,6 +120,8 @@ export type Job = {
   createdAt: string;
   /** A virtual call booked as a fallback. */
   virtual: boolean;
+  /** The pro's request, while status is more_info. */
+  followUp?: FollowUp;
 };
 
 export type RecordStatus =
@@ -119,7 +131,9 @@ export type RecordStatus =
   | "scheduled"
   | "en_route"
   | "done"
-  | "handoff";
+  | "handoff"
+  | "declined"
+  | "cancelled";
 
 /** One row of the Home Record. */
 export type RecordItem = {
@@ -133,10 +147,12 @@ export type RecordItem = {
   /** Route to open when tapped. */
   href: string;
   /** Provider's request, when status is needs_info. */
-  followUp?: { provider: string; message: string };
+  followUp?: FollowUp;
 };
 
 export type SpecOutcome =
   | { kind: "match"; spec: JobSpec; options: MatchOption[] }
   | { kind: "handoff"; spec: JobSpec }
-  | { kind: "no_provider"; spec: JobSpec };
+  | { kind: "no_provider"; spec: JobSpec }
+  /** Already sent to a pro (e.g. after answering an "ask for more"): show the job. */
+  | { kind: "submitted"; spec: JobSpec; jobId: string };
