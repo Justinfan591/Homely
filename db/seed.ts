@@ -49,7 +49,51 @@ async function main() {
     }
     console.log(`${p.role.padEnd(9)} ${p.email}`);
   }
+  seedScope();
   console.log(`\nAll demo accounts use the password: ${PASSWORD}`);
+}
+
+// ---------- Scope providers + demo home ----------
+// Everything is placed around DEMO_LAT/DEMO_LNG (default: downtown Montreal).
+// Run `npm run db:seed` again with new values to move the demo to the venue.
+try {
+  process.loadEnvFile(".env.local");
+} catch {
+  // No .env.local: use the defaults.
+}
+const CENTER = { lat: Number(process.env.DEMO_LAT) || 45.5019, lng: Number(process.env.DEMO_LNG) || -73.5674 };
+const at = (dLat: number, dLng: number) => ({ lat: CENTER.lat + dLat, lng: CENTER.lng + dLng });
+
+const scopeProviders = [
+  { name: "Mold Busters", trades: ["mold"], ...at(0.05, -0.03), radiusKm: 50, rating: 4.9, ratingCount: 212, phone: "555-0150", offersVirtual: true, rateCard: { base: 150, per_m2: 40, severity_multiplier: [1, 1, 1.2, 1.5, 2] } },
+  { name: "ClearSpore Remediation", trades: ["mold"], ...at(-0.02, 0.02), radiusKm: 15, rating: 4.6, ratingCount: 48, phone: "555-0151", offersVirtual: false, rateCard: { base: 120, per_m2: 35, severity_multiplier: [1, 1.1, 1.3, 1.6, 2.1] } },
+  // Out of range on purpose: shows the distance filter.
+  { name: "Northshore Mold Co", trades: ["mold"], ...at(2.5, 0), radiusKm: 40, rating: 4.8, ratingCount: 90, phone: "555-0152", offersVirtual: false, rateCard: { base: 140, per_m2: 38, severity_multiplier: [1, 1, 1.2, 1.5, 2] } },
+  { name: "Clearwater Plumbing", trades: ["plumbing_sink"], ...at(0.03, 0.04), radiusKm: 25, rating: 4.8, ratingCount: 133, phone: "555-0160", offersVirtual: true, rateCard: { base: 120, per_m2: 15, severity_multiplier: [1, 1.1, 1.3, 1.6, 2] } },
+  { name: "Pipeline Pros", trades: ["plumbing_sink"], ...at(-0.06, -0.05), radiusKm: 20, rating: 4.5, ratingCount: 61, phone: "555-0161", offersVirtual: false, rateCard: { base: 95, per_m2: 10, severity_multiplier: [1, 1.15, 1.35, 1.7, 2.2] } },
+];
+
+function seedScope() {
+  console.log("");
+  for (const p of scopeProviders) {
+    const existing = db.select().from(schema.providers).where(eq(schema.providers.name, p.name)).get();
+    if (existing) {
+      // Only move it; keep rate card or rating changes made in /pro.
+      db.update(schema.providers).set({ lat: p.lat, lng: p.lng, radiusKm: p.radiusKm }).where(eq(schema.providers.id, existing.id)).run();
+    } else {
+      db.insert(schema.providers).values(p).run();
+    }
+    const row = db.select().from(schema.providers).where(eq(schema.providers.name, p.name)).get()!;
+    console.log(`provider  #${row.id} ${p.name} (${p.trades.join(", ")})  /pro?provider=${row.id}`);
+  }
+  const customer = db.select().from(schema.users).where(eq(schema.users.email, "customer@demo.com")).get();
+  if (customer) {
+    const values = { label: "Demo house", address: "Demo house", lat: CENTER.lat, lng: CENTER.lng };
+    const home = db.select().from(schema.homes).where(eq(schema.homes.customerId, customer.id)).get();
+    if (home) db.update(schema.homes).set(values).where(eq(schema.homes.id, home.id)).run();
+    else db.insert(schema.homes).values({ customerId: customer.id, ...values }).run();
+    console.log(`home      Demo house for customer@demo.com at ${CENTER.lat}, ${CENTER.lng}`);
+  }
 }
 
 main();

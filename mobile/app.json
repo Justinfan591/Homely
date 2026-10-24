@@ -12,7 +12,7 @@
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#E7F7F1",
+        "backgroundColor": "#EEF3FF",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
@@ -28,12 +28,26 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#059673",
+          "backgroundColor": "#2F6BFF",
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 76
         }
       ],
-      "expo-secure-store"
+      "expo-secure-store",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Scope uses the camera to photograph the problem so a pro can price it.",
+          "microphonePermission": false,
+          "recordAudioAndroid": false
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Scope uses your location to find pros near your home."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": false,

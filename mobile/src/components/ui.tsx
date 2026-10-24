@@ -16,7 +16,7 @@ import {
   type ViewStyle,
 } from "react-native";
 import { STATUS_LABELS, TRADE_LABELS, type Trade } from "@shared/types";
-import { colors, radius } from "@/lib/theme";
+import { colors, font, radius } from "@/lib/theme";
 
 type Variant = "primary" | "secondary" | "ghost" | "danger";
 
@@ -234,12 +234,12 @@ export const s = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 11,
   },
-  buttonLarge: { paddingVertical: 14 },
-  buttonText: { fontSize: 15, fontWeight: "600" },
-  buttonTextLarge: { fontSize: 16 },
+  buttonLarge: { paddingVertical: 17, borderRadius: radius.lg },
+  buttonText: { fontSize: 15, fontFamily: font.semibold },
+  buttonTextLarge: { fontSize: 17 },
   disabled: { opacity: 0.5 },
   pressed: { opacity: 0.8 },
-  link: { color: colors.brand700, fontWeight: "600" },
+  link: { color: colors.brand700, fontFamily: font.semibold },
   spinnerWrap: { paddingVertical: 32, alignItems: "center" },
   card: {
     backgroundColor: colors.white,
@@ -254,8 +254,8 @@ export const s = StyleSheet.create({
     shadowOffset: { width: 0, height: 1 },
     elevation: 1,
   },
-  label: { fontSize: 14, fontWeight: "500", marginBottom: 6, color: colors.ink },
-  hint: { fontSize: 12, color: colors.ink50, marginTop: 4 },
+  label: { fontSize: 14, fontFamily: font.medium, marginBottom: 6, color: colors.ink },
+  hint: { fontFamily: font.regular, fontSize: 12, color: colors.ink50, marginTop: 4 },
   input: {
     borderWidth: 1,
     borderColor: colors.borderStrong,
@@ -264,40 +264,41 @@ export const s = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: Platform.OS === "ios" ? 12 : 9,
     fontSize: 16,
+    fontFamily: font.regular,
     color: colors.ink,
   },
   inputMulti: { minHeight: 64, textAlignVertical: "top" },
-  error: { backgroundColor: colors.red50, color: colors.red700, borderRadius: radius.md, paddingHorizontal: 14, paddingVertical: 10, fontSize: 14, overflow: "hidden" },
+  error: { fontFamily: font.regular, backgroundColor: colors.red50, color: colors.red700, borderRadius: radius.md, paddingHorizontal: 14, paddingVertical: 10, fontSize: 14, overflow: "hidden" },
   notice: { borderRadius: radius.md, padding: 12, borderWidth: 1 },
   badge: { borderRadius: radius.full, paddingHorizontal: 10, paddingVertical: 3, alignSelf: "flex-start" },
-  badgeText: { fontSize: 12, fontWeight: "600" },
+  badgeText: { fontSize: 12, fontFamily: font.semibold },
   empty: { borderWidth: 1, borderStyle: "dashed", borderColor: "rgba(0,0,0,0.15)", borderRadius: radius.lg, paddingHorizontal: 20, paddingVertical: 32, alignItems: "center", gap: 4 },
-  emptyTitle: { fontWeight: "600", fontSize: 15, color: colors.ink, textAlign: "center" },
-  emptyBody: { fontSize: 14, color: colors.ink60, textAlign: "center" },
+  emptyTitle: { fontFamily: font.semibold, fontSize: 15, color: colors.ink, textAlign: "center" },
+  emptyBody: { fontFamily: font.regular, fontSize: 14, color: colors.ink60, textAlign: "center" },
   chipRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   chip: { borderRadius: radius.full, paddingHorizontal: 14, paddingVertical: 7, borderWidth: 1, borderColor: colors.borderStrong, backgroundColor: colors.white },
   chipOn: { backgroundColor: colors.brand600, borderColor: colors.brand600 },
-  chipText: { fontSize: 14, fontWeight: "500", color: colors.ink },
+  chipText: { fontSize: 14, fontFamily: font.medium, color: colors.ink },
   chipTextOn: { color: colors.white },
   segment: { flexDirection: "row", backgroundColor: colors.tint, borderRadius: radius.md, padding: 4, gap: 4 },
   segmentItem: { flex: 1, borderRadius: radius.sm, paddingVertical: 9, alignItems: "center" },
   segmentOn: { backgroundColor: colors.white, shadowColor: "#000", shadowOpacity: 0.06, shadowRadius: 2, shadowOffset: { width: 0, height: 1 }, elevation: 1 },
-  segmentText: { fontSize: 14, fontWeight: "600", color: colors.ink60 },
+  segmentText: { fontSize: 14, fontFamily: font.semibold, color: colors.ink60 },
   segmentTextOn: { color: colors.ink },
-  screen: { padding: 16, paddingBottom: 48, gap: 16 },
-  title: { fontSize: 24, fontWeight: "700", color: colors.ink, letterSpacing: -0.3 },
-  heading: { fontSize: 17, fontWeight: "700", color: colors.ink },
-  muted: { fontSize: 14, color: colors.ink60, lineHeight: 20 },
-  body: { fontSize: 15, color: colors.ink, lineHeight: 21 },
+  screen: { padding: 20, paddingBottom: 56, gap: 18 },
+  title: { fontSize: 28, fontFamily: font.bold, color: colors.ink, letterSpacing: -0.3 },
+  heading: { fontSize: 17, fontFamily: font.bold, color: colors.ink },
+  muted: { fontFamily: font.regular, fontSize: 14, color: colors.ink60, lineHeight: 20 },
+  body: { fontFamily: font.regular, fontSize: 15, color: colors.ink, lineHeight: 21 },
 });
 
 const tone = StyleSheet.create({
   brandBox: { backgroundColor: colors.brand50, borderColor: colors.brand200 },
-  brandText: { color: colors.brand900, fontSize: 14, lineHeight: 20 },
+  brandText: { fontFamily: font.regular, color: colors.brand900, fontSize: 14, lineHeight: 20 },
   warnBox: { backgroundColor: colors.amber50, borderColor: colors.amber200 },
-  warnText: { color: colors.amber900, fontSize: 14, lineHeight: 20 },
+  warnText: { fontFamily: font.regular, color: colors.amber900, fontSize: 14, lineHeight: 20 },
   dangerBox: { backgroundColor: colors.red50, borderColor: colors.red200 },
-  dangerText: { color: colors.red800, fontSize: 14, lineHeight: 20, fontWeight: "500" },
+  dangerText: { color: colors.red800, fontSize: 14, lineHeight: 20, fontFamily: font.medium },
 });
 
 const noticeTones = {
