@@ -19,6 +19,7 @@ import type {
   ScanPhotoInfo,
   ScanResponse,
   ShotResult,
+  Slot,
   TemplateSummary,
 } from "./scope";
 
@@ -120,10 +121,12 @@ export function createScopeClient(options: ScopeClientOptions = {}) {
       skipShot: (scanId: number, shotId: string) => call<ShotResult>(scanPath(scanId, "skip"), { body: { shotId } }),
       /** Tap answers + optional note → JobSpec. Takes a few seconds with real AI. */
       finish: (scanId: number, answers: Record<string, string>, notes?: string | null) => call<ScanResponse>(scanPath(scanId, "finish"), { body: { answers, notes } }),
-      /** "Book [Provider] · [time]" with a provider from `matches`. Also used to rebook after a decline. */
-      book: (scanId: number, providerId: number) => call<ScanResponse>(scanPath(scanId, "book"), { body: { providerId } }),
-      /** No pro in range (or all declined): virtual call with the trade's partner. */
-      requestVirtualCall: (scanId: number) => call<ScanResponse>(scanPath(scanId, "virtual-call"), { method: "POST" }),
+      /** "Book [Provider] · [time]" with a provider from `matches`; `slot` is the requested `startsAt`. Also used to rebook after a decline. */
+      book: (scanId: number, providerId: number, slot?: string) => call<ScanResponse>(scanPath(scanId, "book"), { body: { providerId, slot } }),
+      /** No pro in range (or all declined): virtual call with the trade's partner, optionally at a requested `slot`. */
+      requestVirtualCall: (scanId: number, slot?: string) => call<ScanResponse>(scanPath(scanId, "virtual-call"), { body: { slot } }),
+      /** Bookable times (for a virtual call when there are no `matches`). */
+      slots: () => call<{ slots: Slot[] }>("/api/slots"),
       /** "I'd rather talk to a person": handoff to human review. */
       askForHuman: (scanId: number) => call<ScanResponse>(scanPath(scanId, "human"), { method: "POST" }),
       /** The pro asked for more (job.status "more_info"): reopen capture for just those items. */

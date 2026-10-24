@@ -88,7 +88,8 @@ export const JOB_STATUSES = ["pending", "handoff", "virtual_call", "more_info", 
 export type ScopeJobStatus = (typeof JOB_STATUSES)[number];
 
 export const PRO_TABS = {
-  new: ["pending"],
+  // more_info stays in New (badged "Waiting for homeowner") until the homeowner replies.
+  new: ["pending", "more_info"],
   review: ["handoff", "virtual_call"],
   active: ["accepted", "en_route"],
   done: ["done"],
@@ -148,6 +149,8 @@ export type ScopeJobInfo = {
   provider: { id: number; name: string; rating: number; ratingCount: number; phone: string | null } | null;
   distanceKm: number | null;
   slot: string | null;
+  /** The time the homeowner asked for when booking (the pro confirms `slot`). */
+  requestedSlot: string | null;
   /** When the pro is expected (slot start once accepted; arrival time once en route). */
   eta: string | null;
   price: number | null;
@@ -195,6 +198,10 @@ export type HomeRecordItem = {
   priceLow: number | null;
   priceHigh: number | null;
   price: number | null;
+  /** The pro's "ask for more", while the job is more_info. */
+  request: MoreInfoRequest | null;
+  /** Signed link to the first usable photo, for a thumbnail. */
+  photoSrc: string | null;
   needsAction: boolean;
   updatedAt: string;
 };

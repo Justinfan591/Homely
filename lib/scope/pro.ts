@@ -12,16 +12,21 @@ import {
   type ProQueueCard,
   type ProTab,
   type RateCard,
+  type Slot,
 } from "@/shared/scope";
 import { distanceKm, etaMinutes, slotsFor, virtualPartner } from "./matching";
-import { bestPhotos, jobInfo, moveJob, photoInfo, scanInfo, scanPhotoRows, specInfo } from "./service";
+import { bestPhotos, jobInfo, moveJob, parseSlot, photoInfo, scanInfo, scanPhotoRows, specInfo } from "./service";
 import { getTemplate } from "./templates";
 
 const { providers, scopeJobs, jobSpecs, scans, homes } = schema;
 
 /** The /pro dashboard has no auth: the provider comes from ?provider=<id>. */
 export function providerFromRequest(req: Request): Provider {
-  const id = Number(new URL(req.url).searchParams.get("provider"));
+  return providerById(new URL(req.url).searchParams.get("provider"));
+}
+
+export function providerById(value: unknown): Provider {
+  const id = Number(value);
   if (!Number.isInteger(id) || id <= 0) throw new HttpError(400, "Add ?provider=<id> to the URL.");
   const p = db.select().from(providers).where(eq(providers.id, id)).get();
   if (!p) throw new HttpError(404, "Provider not found.");
@@ -110,20 +115,23 @@ export function jobDetail(p: Provider, jobId: number): ProJobDetail {
     photos: photoInfo(bestPhotos(template, rows)),
     spec: specInfo(spec),
     quote: quote(p.rateCard, spec),
-    slots: slotsFor(),
+    slots: withRequested(slotsFor(), job.requestedSlot),
     answers: template.questions.filter((q) => scan.answers[q.id]).map((q) => ({ id: q.id, q: q.q, answer: scan.answers[q.id] })),
   };
+}
+
+/** The homeowner's requested time goes first, so /pro pre-selects it. */
+function withRequested(slots: Slot[], requested: Date | null): Slot[] {
+  if (!requested || requested.getTime() < Date.now()) return slots;
+  const iso = requested.toISOString();
+  return [{ id: "requested", startsAt: iso }, ...slots.filter((s) => s.startsAt !== iso)];
 }
 
 export function accept(p: Provider, jobId: number, input: { slot: string; price: number }) {
   const { job, spec } = loadJob(p, jobId);
   const q = quote(p.rateCard, spec);
   if (input.price < q.low || input.price > q.high) throw new HttpError(400, `Price must be between $${q.low} and $${q.high}.`);
-  const slot = new Date(input.slot);
-  const week = Date.now() + 7 * 24 * 3600 * 1000;
-  if (Number.isNaN(slot.getTime()) || slot.getTime() < Date.now() - 5 * 60 * 1000 || slot.getTime() > week) {
-    throw new HttpError(400, "Pick one of the offered time slots.");
-  }
+  const slot = parseSlot(input.slot);
   return moveJob(job, ["pending", "handoff", "virtual_call"], { status: "accepted", providerId: p.id, slot, eta: slot, price: Math.round(input.price) });
 }
 

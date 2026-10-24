@@ -118,6 +118,7 @@ export function jobInfo(job: ScopeJob, home: Pick<Home, "lat" | "lng">): ScopeJo
     provider: provider ? { id: provider.id, name: provider.name, rating: provider.rating, ratingCount: provider.ratingCount, phone: provider.phone } : null,
     distanceKm: provider ? Math.round(distanceKm(home, provider) * 10) / 10 : null,
     slot: job.slot?.toISOString() ?? null,
+    requestedSlot: job.requestedSlot?.toISOString() ?? null,
     eta: job.eta?.toISOString() ?? null,
     price: job.price,
     request: job.request ?? null,
@@ -168,6 +169,7 @@ export function homeRecord(home: Home): HomeRecordItem[] {
   const specs = db.select().from(jobSpecs).where(inArray(jobSpecs.scanId, ids)).orderBy(asc(jobSpecs.version)).all();
   const jobs = db.select().from(scopeJobs).where(inArray(scopeJobs.scanId, ids)).all();
   const provs = db.select().from(providers).all();
+  const okPhotos = db.select().from(scanPhotos).where(and(inArray(scanPhotos.scanId, ids), eq(scanPhotos.ok, true))).orderBy(asc(scanPhotos.id)).all();
   return rows.map((s) => {
     const t = getTemplateSafe(s.trade);
     const spec = specs.filter((x) => x.scanId === s.id).at(-1);
@@ -187,6 +189,11 @@ export function homeRecord(home: Home): HomeRecordItem[] {
       priceLow: spec?.priceLow ?? null,
       priceHigh: spec?.priceHigh ?? null,
       price: job?.price ?? null,
+      request: job?.status === "more_info" ? (job.request ?? null) : null,
+      photoSrc: (() => {
+        const p = okPhotos.find((x) => x.scanId === s.id);
+        return p ? signedPhotoUrl(p.id) : null;
+      })(),
       needsAction: s.status !== "cancelled" && needsAction,
       updatedAt: updated.toISOString(),
     };
@@ -354,6 +361,16 @@ export async function finishScan(scan: Scan, home: Home, input: { answers: Recor
 
 // ---------- Booking & tracking ----------
 
+/** A slot from slotsFor(): a valid time from now (5 min grace) up to a week out. */
+export function parseSlot(iso: string): Date {
+  const slot = new Date(iso);
+  const week = Date.now() + 7 * 24 * 3600 * 1000;
+  if (Number.isNaN(slot.getTime()) || slot.getTime() < Date.now() - 5 * 60 * 1000 || slot.getTime() > week) {
+    throw new HttpError(400, "Pick one of the offered time slots.");
+  }
+  return slot;
+}
+
 /** Updates a job only if it's still in one of `from` (so two clicks can't both win). */
 export function moveJob(job: ScopeJob, from: ScopeJobStatus[], set: Partial<ScopeJob>): ScopeJob {
   if (!from.includes(job.status)) throw new HttpError(409, `This job is ${job.status.replace("_", " ")} and can't do that now.`);
@@ -367,7 +384,8 @@ export function moveJob(job: ScopeJob, from: ScopeJobStatus[], set: Partial<Scop
   return updated;
 }
 
-export function book(scan: Scan, home: Home, providerId: number) {
+export function book(scan: Scan, home: Home, providerId: number, slot?: string) {
+  const requestedSlot = slot ? parseSlot(slot) : null;
   const spec = latestSpec(scan.id);
   if (!spec) throw new HttpError(409, "There's no estimate to book yet.");
   const job = jobOfScan(scan.id);
@@ -376,22 +394,23 @@ export function book(scan: Scan, home: Home, providerId: number) {
   if (!match) throw new HttpError(400, "That pro doesn't cover this job.");
 
   if (job) {
-    moveJob(job, ["declined"], { providerId, status: "pending", specId: spec.id, mode: "onsite" });
+    moveJob(job, ["declined"], { providerId, status: "pending", specId: spec.id, mode: "onsite", requestedSlot });
   } else {
-    db.insert(scopeJobs).values({ scanId: scan.id, specId: spec.id, providerId, status: "pending" }).run();
+    db.insert(scopeJobs).values({ scanId: scan.id, specId: spec.id, providerId, status: "pending", requestedSlot }).run();
   }
   db.update(jobSpecs).set({ priceLow: match.quote.low, priceHigh: match.quote.high, pricedForProviderId: providerId }).where(eq(jobSpecs.id, spec.id)).run();
   touch(scan.id, { status: "submitted" });
 }
 
 /** No pro in range (or all declined): ask the trade's virtual partner for a video call. */
-export function requestVirtualCall(scan: Scan) {
+export function requestVirtualCall(scan: Scan, slot?: string) {
+  const requestedSlot = slot ? parseSlot(slot) : null;
   const spec = latestSpec(scan.id);
   if (!spec) throw new HttpError(409, "There's no scan to share yet.");
   const job = jobOfScan(scan.id);
   // Nobody left? providerId stays null and every pro in the trade sees it under Needs review.
   const partner = virtualPartner(scan.trade, job?.declinedBy ?? []);
-  const set = { status: "virtual_call" as const, mode: "virtual" as const, providerId: partner?.id ?? null, specId: spec.id };
+  const set = { status: "virtual_call" as const, mode: "virtual" as const, providerId: partner?.id ?? null, specId: spec.id, requestedSlot };
   if (job) moveJob(job, ["declined", "handoff"], set);
   else if (scan.status === "spec_ready") db.insert(scopeJobs).values({ scanId: scan.id, ...set }).run();
   else throw new HttpError(409, "This scan can't request a call right now.");

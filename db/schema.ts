@@ -233,6 +233,8 @@ export const scopeJobs = sqliteTable("scope_jobs", {
   status: text("status", { enum: SCOPE_JOB_STATUSES }).notNull(),
   mode: text("mode", { enum: ["onsite", "virtual"] }).notNull().default("onsite"),
   slot: integer("slot", { mode: "timestamp" }),
+  /** Time the homeowner asked for when booking; the pro confirms it (or picks another) as `slot`. */
+  requestedSlot: integer("requested_slot", { mode: "timestamp" }),
   eta: integer("eta", { mode: "timestamp" }),
   price: real("price"),
   request: text("request", { mode: "json" }).$type<MoreInfoRequest>(),
