@@ -23,7 +23,10 @@ export function FollowUpNotifier() {
 
   useEffect(() => {
     if (Platform.OS === "web") return;
-    Notifications.requestPermissionsAsync().catch(() => {});
+    // Logged to the `npx expo start` terminal, so a missing notification can be traced.
+    Notifications.requestPermissionsAsync()
+      .then((p) => console.log(`[notify] permission: ${p.status}${p.granted ? "" : " (turn on in iPhone Settings → Notifications → Expo Go)"}`))
+      .catch((err) => console.warn("[notify] permission request failed:", err));
     const open = (r: Notifications.NotificationResponse) => {
       const href = r.notification.request.content.data?.href;
       if (typeof href === "string") router.push(href as never);
@@ -38,11 +41,13 @@ export function FollowUpNotifier() {
     // Requests already there at launch show as the home banner; only new ones notify.
     if (!seen.current) {
       seen.current = new Set(waiting.map((i) => i.id));
+      console.log(`[notify] watching; ${waiting.length} request(s) already waiting show as the home banner`);
       return;
     }
     for (const item of waiting) {
       if (seen.current.has(item.id)) continue;
       seen.current.add(item.id);
+      console.log(`[notify] new request from ${item.followUp?.provider ?? "a pro"} on scan ${item.id}`);
       Notifications.scheduleNotificationAsync({
         content: {
           title: `${item.followUp?.provider ?? "Your pro"} needs a bit more`,
@@ -50,7 +55,7 @@ export function FollowUpNotifier() {
           data: { href: item.href },
         },
         trigger: null,
-      }).catch(() => {});
+      }).catch((err) => console.warn("[notify] couldn't show the notification:", err));
     }
     // Answered requests can come back later (a second "ask for more").
     for (const id of seen.current) if (!waiting.some((i) => i.id === id)) seen.current.delete(id);
