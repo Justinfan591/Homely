@@ -66,3 +66,20 @@ export async function uploadPhotos(jobId: number, photos: PickedPhoto[], labels:
   }
   await api(`/api/jobs/${jobId}/photos`, { body: form });
 }
+
+/** Shrinks a camera capture (same rules as picked photos) so uploads stay fast. */
+export async function prepareCapture(pic: { uri: string; width: number; height: number }): Promise<PickedPhoto> {
+  return resize({ uri: pic.uri, width: pic.width, height: pic.height, mimeType: "image/jpeg" } as ImagePicker.ImagePickerAsset, 0);
+}
+
+/** Uploads one guided shot. The server runs the vision check and returns the result. */
+export async function uploadShot<T>(scanId: number, shotId: string, photo: PickedPhoto): Promise<T> {
+  const form = new FormData();
+  form.append("shotId", shotId);
+  if (Platform.OS === "web") {
+    form.append("photo", await (await fetch(photo.uri)).blob(), photo.name);
+  } else {
+    form.append("photo", { uri: photo.uri, name: photo.name, type: photo.type } as unknown as Blob);
+  }
+  return api<T>(`/api/scans/${scanId}/shots`, { body: form });
+}

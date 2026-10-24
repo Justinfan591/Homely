@@ -1,3 +1,4 @@
+import { Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_700Bold, useFonts } from "@expo-google-fonts/inter";
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { View } from "react-native";
@@ -10,7 +11,9 @@ import { colors } from "@/lib/theme";
 
 function RootStack() {
   const { loading } = useAuth();
-  if (loading) {
+  const [fontsLoaded, fontError] = useFonts({ Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_700Bold });
+  // If the font fails to load, carry on with the system font.
+  if (loading || (!fontsLoaded && !fontError)) {
     return (
       <View style={{ flex: 1, justifyContent: "center", backgroundColor: colors.bg }}>
         <Spinner />

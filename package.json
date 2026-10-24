@@ -4,10 +4,12 @@
   "private": true,
   "scripts": {
     "dev": "next dev -H 0.0.0.0",
+    "dev:fake": "node scripts/dev-fake.mjs",
     "build": "next build",
     "start": "next start -H 0.0.0.0",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
+    "test:e2e": "tsx scripts/e2e-scope.ts",
     "db:push": "drizzle-kit push",
     "db:seed": "tsx db/seed.ts",
     "setup": "npm run db:push && npm run db:seed",
