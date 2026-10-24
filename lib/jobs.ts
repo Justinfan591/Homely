@@ -15,14 +15,18 @@ const TRANSITIONS: Record<string, Role[]> = {
   "open>agent_review": ["customer", "agent"],
   "agent_review>open": ["agent"],
   "open>assigned": ["provider", "agent"],
-  "agent_review>assigned": ["agent"],
+  "agent_review>assigned": ["agent", "provider"],
+  // "Ask for more" from the /pro dashboard; the homeowner's reply sends it back to open.
+  "open>more_info": ["provider"],
+  "agent_review>more_info": ["provider"],
+  "more_info>open": ["customer"],
   "assigned>agent_review": ["agent"],
   "assigned>en_route": ["provider"],
   "en_route>in_progress": ["provider"],
   "assigned>in_progress": ["provider"],
   "in_progress>completed": ["provider"],
 };
-const CANCELLABLE: JobStatus[] = ["intake", "report_ready", "open", "agent_review", "assigned"];
+const CANCELLABLE: JobStatus[] = ["intake", "report_ready", "open", "agent_review", "more_info", "assigned"];
 
 export function canTransition(from: JobStatus, to: JobStatus, role: Role) {
   if (to === "cancelled") return CANCELLABLE.includes(from) && role !== "provider";
@@ -107,9 +111,10 @@ export function loadJobFor(user: User, jobId: number): Job {
 export function canView(user: User, job: Job) {
   if (user.role === "agent") return true;
   if (user.role === "customer") return job.customerId === user.id;
-  // Providers see jobs assigned to them, and open jobs that match their profile.
-  if (job.providerId === user.id) return true;
-  if (job.status !== "open") return false;
+  // Providers see jobs assigned to them, jobs they asked more about,
+  // and open or needs-review jobs that match their profile.
+  if (job.providerId === user.id || job.moreInfo?.providerId === user.id) return true;
+  if (job.status !== "open" && job.status !== "agent_review") return false;
   const profile = getProfile(user.id);
   return !!profile && providerMatches(profile, job);
 }

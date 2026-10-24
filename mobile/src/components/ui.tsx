@@ -126,6 +126,7 @@ const statusColors: Record<string, [string, string]> = {
   report_ready: ["#e0f2fe", "#075985"],
   open: ["#fef3c7", "#92400e"],
   agent_review: ["#ede9fe", "#5b21b6"],
+  more_info: [colors.amber50, colors.amber900],
   assigned: [colors.brand100, colors.brand900],
   en_route: [colors.brand100, colors.brand900],
   in_progress: [colors.brand100, colors.brand900],

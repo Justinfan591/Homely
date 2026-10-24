@@ -1,14 +1,16 @@
 import { Stack, useLocalSearchParams } from "expo-router";
-import { useCallback, useRef } from "react";
+import { useCallback, useRef, useState } from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
 import type { JobResponse } from "@shared/api-types";
 import { IntakeChat } from "@/components/IntakeChat";
 import { MessageThread, ProviderCard, Timeline, useJob } from "@/components/JobParts";
-import { PhotoGallery } from "@/components/Photos";
+import { PhotoGallery, PhotoPicker } from "@/components/Photos";
 import { ReportCard } from "@/components/ReportCard";
-import { Body, Button, Card, ErrorText, Heading, LinkText, Muted, Notice, Screen, Spinner, StatusBadge, type ScreenRef } from "@/components/ui";
+import { Body, Button, Card, ErrorText, Field, Heading, Input, LinkText, Muted, Notice, Screen, Spinner, StatusBadge, type ScreenRef } from "@/components/ui";
+import { api } from "@/lib/api";
 import { confirmAction } from "@/lib/confirm";
 import { colors, radius } from "@/lib/theme";
+import { uploadPhotos, type PickedPhoto } from "@/lib/photos";
 import { useAction } from "@/lib/useAction";
 
 function Handoff({ job, refresh }: { job: JobResponse; refresh: () => Promise<unknown> }) {
@@ -44,9 +46,61 @@ function Handoff({ job, refresh }: { job: JobResponse; refresh: () => Promise<un
   );
 }
 
+/** A pro asked for specific extra photos or details from the /pro dashboard. */
+function MoreInfo({ job, refresh }: { job: JobResponse; refresh: () => Promise<unknown> }) {
+  const req = job.job.moreInfo!;
+  const [photos, setPhotos] = useState<PickedPhoto[]>([]);
+  const [reply, setReply] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function send() {
+    if (!photos.length && !reply.trim()) return setError("Add a photo or a reply first.");
+    setBusy(true);
+    setError("");
+    try {
+      await uploadPhotos(job.job.id, photos, photos.map((_, i) => req.shots[i] ?? "Follow-up"));
+      await api(`/api/jobs/${job.job.id}/more`, { body: { reply: reply.trim() || undefined } });
+      await refresh();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card style={{ gap: 14 }}>
+      <View style={{ gap: 4 }}>
+        <Heading>{req.providerName} needs a bit more</Heading>
+        {req.message ? <Body>{req.message}</Body> : null}
+      </View>
+      {req.shots.length > 0 && (
+        <View style={{ gap: 4 }}>
+          {req.shots.map((s, i) => (
+            <Body key={s}>
+              {i + 1}. {s}
+            </Body>
+          ))}
+          <Muted>Take them in this order. Keep faces and documents out of the shot.</Muted>
+        </View>
+      )}
+      <PhotoPicker photos={photos} onChange={setPhotos} max={Math.max(1, req.shots.length || 3)} />
+      <Field label="Reply" hint="Optional.">
+        <Input value={reply} onChangeText={setReply} multiline />
+      </Field>
+      <ErrorText>{error}</ErrorText>
+      <Button title={`Send to ${req.providerName}`} onPress={send} loading={busy} large />
+    </Card>
+  );
+}
+
+const when = (iso: string) => new Date(iso).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+
 const NEXT_STEP: Record<string, string> = {
   open: "We've sent your job to local pros nearby. You'll see their details here as soon as one accepts.",
   agent_review: "A support agent will review your report and get back to you here shortly.",
+  more_info: "",
   assigned: "Your pro has the job and your report. They'll be in touch to confirm a time.",
   en_route: "Your pro is on the way.",
   in_progress: "Work is underway.",
@@ -66,7 +120,7 @@ export default function CustomerJobScreen() {
 
   const { status, report } = job.job;
   const photoUrl = (pid: number) => job.photos.find((p) => p.id === pid)?.url;
-  const canCancel = ["intake", "report_ready", "open", "agent_review", "assigned"].includes(status);
+  const canCancel = ["intake", "report_ready", "open", "agent_review", "more_info", "assigned"].includes(status);
 
   return (
     <Screen ref={scroll}>
@@ -98,11 +152,26 @@ export default function CustomerJobScreen() {
         </>
       )}
 
+      {status === "more_info" && job.job.moreInfo && <MoreInfo job={job} refresh={mutate} />}
+
       {!["intake", "report_ready"].includes(status) && (
         <>
           <Card>
-            <Body>{NEXT_STEP[status]}</Body>
+            {NEXT_STEP[status] ? <Body>{NEXT_STEP[status]}</Body> : null}
             {job.provider && <ProviderCard provider={job.provider} />}
+            {job.job.slot && (
+              <View style={{ gap: 2 }}>
+                <Muted>{job.job.virtualCall ? "Virtual call" : "Arriving"}</Muted>
+                <Text style={st.optionTitle}>{when(job.job.slot)}</Text>
+              </View>
+            )}
+            {job.job.price != null && (
+              <View style={{ gap: 2 }}>
+                <Muted>Price</Muted>
+                <Text style={st.optionTitle}>${job.job.price.toLocaleString()}</Text>
+                <Muted style={{ fontSize: 12 }}>Estimate — confirmed by provider.</Muted>
+              </View>
+            )}
             {job.agent && !job.provider && <Muted>Support agent: {job.agent.name}</Muted>}
           </Card>
           {report ? <ReportCard report={report} photoUrl={photoUrl} /> : <PhotoGallery photos={job.photos} />}

@@ -14,7 +14,7 @@ function HeaderLink({ title, onPress }: { title: string; onPress: () => void }) 
   );
 }
 
-/** Header buttons for a role's home screen: extra links plus "Sign out". */
+/** Header buttons for a role's home screen: extra links plus "Switch account". */
 export function HomeHeaderRight({ links = [] }: { links?: { title: string; href: string }[] }) {
   const { logout } = useAuth();
   return (
@@ -23,9 +23,9 @@ export function HomeHeaderRight({ links = [] }: { links?: { title: string; href:
         <HeaderLink key={l.href} title={l.title} onPress={() => router.push(l.href as never)} />
       ))}
       <HeaderLink
-        title="Sign out"
+        title="Switch"
         onPress={async () => {
-          if (await confirmAction("Sign out of Molsters?", "Sign out", false)) await logout();
+          if (await confirmAction("Switch to another demo account?", "Switch", false)) await logout();
         }}
       />
     </View>

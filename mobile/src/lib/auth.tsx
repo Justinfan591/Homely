@@ -4,6 +4,7 @@ import { Platform } from "react-native";
 import { mutate } from "swr";
 import type { AuthResponse, SessionUser } from "@shared/api-types";
 import { api, setAuthToken, setUnauthorizedHandler } from "./api";
+import { DEFAULT_ACCOUNT, DEMO_PASSWORD } from "./demo";
 
 const TOKEN_KEY = "molsters_token";
 
@@ -48,9 +49,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           setAuthToken(saved);
           const { user } = await api<{ user: SessionUser }>("/api/auth/me");
           setUser(user);
+        } else {
+          // Live demo: start signed in as the demo homeowner instead of showing a sign-in form.
+          const res = await api<AuthResponse>("/api/auth/login", { body: { email: DEFAULT_ACCOUNT, password: DEMO_PASSWORD } });
+          setAuthToken(res.token);
+          await store.set(res.token).catch(() => {});
+          setUser(res.user);
         }
       } catch {
-        // Expired token or server unreachable: show the sign-in screen.
+        // Expired token or server unreachable: show the account picker.
         setAuthToken(null);
       } finally {
         setLoading(false);
