@@ -42,7 +42,10 @@ export function createHttpApi(opts: HttpApiOptions): ScopeApi {
           throw new ApiError(err.message, err.status === 404 ? "not_found" : err.status >= 500 ? "network" : "rejected");
         }
         if (err instanceof ApiError) throw err;
-        throw new ApiError(`We couldn't reach Scope at ${base}. Is the server running, and is your phone on the same Wi-Fi?`);
+        // Shows in the `npx expo start` terminal, so a code bug isn't mistaken for a network problem.
+        console.warn(`Scope request to ${base} failed:`, err);
+        const why = err instanceof Error ? ` (${err.message})` : "";
+        throw new ApiError(`We couldn't reach Scope at ${base}${why}. Is the server running, and is your phone on the same Wi-Fi?`);
       }
     }
   }
