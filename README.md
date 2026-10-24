@@ -199,7 +199,7 @@ npm install
 
 4. Scan the QR code with the iPhone's **Camera** app and tap the banner to open it in Expo Go.
 5. When iOS asks whether Expo Go can **find devices on your local network**, tap **Allow**. Without it the app can't reach the server.
-6. Sign in with a demo account (below). The sign-in screen shows which server address the app is using.
+6. There's no sign-in for the live demo. The app opens signed in as the demo homeowner. Tap **Switch** (top right) to pick another demo account with one tap. That screen also shows which server address the app is using.
 
 The app finds the server automatically. It uses the computer address that Expo Go loaded the app from, on port 3000. To use a different server, create `mobile/.env` with `EXPO_PUBLIC_API_URL=http://<ip>:3000` and restart `npx expo start`.
 
@@ -215,6 +215,19 @@ ode.exe" -Action Allow -Profile Private
 
 This covers both the API (port 3000) and Expo's dev server (port 8081). Your Wi-Fi must be set to a **Private** network in Windows settings.
 
+### 7. Open the provider dashboard on your laptop
+
+Open <http://localhost:3000/pro> and pick a provider, or go straight to `http://localhost:3000/pro?provider=<id>`. There's no sign-in: the `?provider=` id picks who you are, so only run this on a network you trust.
+
+| Tab | What it does |
+| --- | --- |
+| New / Needs review / Active / Done | The provider's queue. *Needs review* holds handoff and low-confidence jobs. |
+| Spec (click a card) | Photos by shot, AI summary, answers, and the price from the rate card. **Accept** (time slot + price within ±15%), **Ask for more** (the homeowner gets a request on their phone), **Decline**. Handoff jobs can also be booked as a virtual call. |
+| Active job | Status stepper and an **Add to Google Calendar** link. Advancing the status updates the homeowner's screen. |
+| Rate card | `base`, `per_m2` and the severity multipliers. Saving re-prices every spec. |
+
+The page refreshes every 3 seconds.
+
 ---
 
 ## Demo accounts
@@ -223,8 +236,9 @@ Every demo account uses the password **`password123`**.
 
 | Email | Role | Notes |
 | --- | --- | --- |
-| `customer@demo.com` | Customer | Creates jobs |
+| `customer@demo.com` | Customer | Creates jobs. The app signs in as this account on first launch. |
 | `agent@demo.com` | Support agent | Reviews and assigns jobs |
+| `mold@demo.com` | Provider (Mold Busters) | Serves ZIPs 94110, 94103, 94114 |
 | `plumber@demo.com` | Provider (plumbing) | Serves ZIPs 94110, 94103, 94114 |
 | `electrician@demo.com` | Provider (electrical) | Serves ZIPs 94110, 94103 |
 | `hvac@demo.com` | Provider (HVAC) | Serves ZIPs 10001, 10011 |
@@ -233,9 +247,9 @@ You can also sign up in the app as a new customer or pro ("I'm a pro" on the sig
 
 ### Try the full flow
 
-1. Sign in as **customer@demo.com** and start a new job. Use ZIP **94110** and upload a few photos of a leak or similar problem.
+1. On the phone (already the homeowner), start a new job. Use ZIP **94110** and upload a few photos of a leak or similar problem.
 2. Answer the AI assistant's questions until it produces a job report.
-3. Sign out (top right), then sign in as **plumber@demo.com** and accept the job from the open board. A second phone works too.
+3. On the laptop, open `/pro` as **Mold Busters** (mold) or **Rivera Plumbing** (plumbing) and accept the job. Or tap **Switch** on the phone and accept it as that provider.
    - Or send the job to a person, then sign in as **agent@demo.com** to assign it.
    - Open jobs that nobody claims within 15 minutes also show up in the agent's queue.
 4. As the provider, move the job through en route, in progress and completed. Message the customer along the way.
@@ -252,6 +266,8 @@ You can also sign up in the app as a new customer or pro ("I'm a pro" on the sig
 | `npm run mobile` | Start the Expo dev server (same as `cd mobile && npx expo start`) |
 | `npm run build` | Build for production |
 | `npm start` | Run the production API build (run `npm run build` first) |
+| `npx tsx lib/pricing.test.ts` | Check the deterministic pricing |
+| `npm run e2e` | End-to-end test of the phone + `/pro` flow against the running server. Add `-- --ai` to include a real Claude intake. Cleans up after itself. |
 | `npm run typecheck` | Check the server's types (`cd mobile && npm run typecheck` for the app) |
 | `npm run lint` | Run ESLint |
 | `npm run setup` | Run `db:push` and then `db:seed` |
