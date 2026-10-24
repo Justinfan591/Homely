@@ -12,6 +12,7 @@ import { useEffect } from "react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { SWRConfig } from "swr";
+import { FollowUpNotifier } from "@/components/FollowUpNotifier";
 import { HomeProvider } from "@/hooks/home";
 import { colors } from "@/theme";
 
@@ -29,6 +30,7 @@ export default function RootLayout() {
       <SafeAreaProvider>
         <SWRConfig value={{ dedupingInterval: 0, errorRetryCount: 2 }}>
           <HomeProvider>
+            <FollowUpNotifier />
             <StatusBar style="dark" />
             <Stack
               screenOptions={{
