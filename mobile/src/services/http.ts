@@ -228,8 +228,11 @@ export function createHttpApi(opts: HttpApiOptions): ScopeApi {
       run(async () => {
         let r = await scan(scanId);
         if (r.scan.status === "clarifying") {
-          const p = pending.get(scanId) ?? { answers: {}, note: "" };
-          r = await h.finish(r.scan.id, p.answers, p.note || null);
+          const p = pending.get(scanId);
+          // Answers only live in memory until the estimate is made; after an app restart they're gone.
+          const asked = r.template.questions.filter((q) => !r.scan.focus || r.scan.focus.questionIds.includes(q.id));
+          if (!p && asked.some((q) => !q.optional)) throw new ApiError("Please answer the questions again.", "needs_answers");
+          r = await h.finish(r.scan.id, p?.answers ?? {}, p?.note || null);
           pending.delete(scanId);
         }
         return toOutcome(r);

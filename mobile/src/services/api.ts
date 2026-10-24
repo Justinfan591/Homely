@@ -14,7 +14,8 @@ import type {
 export class ApiError extends Error {
   constructor(
     message: string,
-    readonly code: "network" | "not_found" | "rejected" = "network",
+    /** needs_answers: the estimate can't be made yet; send the homeowner back to the questions. */
+    readonly code: "network" | "not_found" | "rejected" | "needs_answers" = "network",
   ) {
     super(message);
   }

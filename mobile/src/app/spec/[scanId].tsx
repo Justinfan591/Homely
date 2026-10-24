@@ -14,7 +14,7 @@ import { moneyRange, SEVERITY_LABELS } from "@/domain/format";
 import type { JobSpec, MatchOption, Scan, Slot, SpecOutcome } from "@/domain/types";
 import { useHome } from "@/hooks/home";
 import { useScan, useSpecOutcome } from "@/hooks/data";
-import { api } from "@/services";
+import { api, ApiError } from "@/services";
 import { getTemplate } from "@/templates";
 import { colors, radius } from "@/theme";
 
@@ -24,7 +24,13 @@ export default function SpecScreen() {
   const { scanId } = useLocalSearchParams<{ scanId: string }>();
   const { data: outcome, error, mutate } = useSpecOutcome(scanId);
   const { data: scan } = useScan(scanId);
+  const needsAnswers = error instanceof ApiError && error.code === "needs_answers";
 
+  useEffect(() => {
+    if (needsAnswers) router.replace(`/clarify/${scanId}`);
+  }, [needsAnswers, scanId]);
+
+  if (needsAnswers) return <Analyzing />;
   if (error) {
     return (
       <Screen onBack={() => goHome()} close>
