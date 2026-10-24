@@ -234,8 +234,18 @@ export type ProfileInfo = {
 /** POST /api/auth/code/verify. `isNew`: the account was just created, so the app asks for a name and home. */
 export type CodeLoginResponse = { token: string; isNew: boolean };
 
-/** POST /api/intake/classify: which trade the homeowner's description (and photo) is about. */
-export type ClassifyResult = { trade: string; label: string; summary: string };
+/**
+ * POST /api/intake/classify: the AI's best guess at the trade from what the homeowner said and/or showed,
+ * two alternatives to offer if it's wrong, and which of the trade's shots the photo already covers.
+ */
+export type ClassifyResult = {
+  trade: string;
+  label: string;
+  summary: string;
+  alternatives: { trade: string; label: string }[];
+  /** Only with a photo: the top trade's shot it fits, so it's reused instead of retaken. */
+  shotId: string | null;
+};
 
 /** Answers to template questions are one of the options, or the homeowner's own words (up to this long). */
 export const FREE_ANSWER_MAX = 200;

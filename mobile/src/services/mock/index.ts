@@ -266,11 +266,22 @@ export const mockApi: ScopeApi = {
 
   transcribe: () => call("transcribe", 900, () => "There's a leak under my kitchen sink. It drips whenever the tap is on."),
 
-  classify: (text) =>
+  classify: (text, photoUri) =>
     call("classify", 900, (): Classification => {
-      const trade = TRADE_WORDS.find(([, re]) => re.test(text))?.[0] ?? "handyman";
+      // A photo with no words looks like a sink in the mock, so the camera path has something to show.
+      const trade = TRADE_WORDS.find(([, re]) => re.test(text))?.[0] ?? (photoUri ? "plumbing_sink" : "handyman");
       const t = templates.find((x) => x.trade === trade) ?? templates[0];
-      return { trade: t.trade, label: t.title, summary: text.split(/[.!?]/)[0]?.trim().slice(0, 80) || t.blurb };
+      const alternatives = ["plumbing_sink", "electrical", "handyman", "mold"]
+        .filter((id) => id !== t.trade)
+        .slice(0, 2)
+        .map((id) => ({ trade: id, label: templates.find((x) => x.trade === id)?.title ?? id }));
+      return {
+        trade: t.trade,
+        label: t.title,
+        summary: text.split(/[.!?]/)[0]?.trim().slice(0, 80) || t.blurb,
+        alternatives,
+        shotId: photoUri ? (t.requiredShots[0]?.id ?? null) : null,
+      };
     }),
 
   listHomes: () => call("listHomes", 150, () => homes),
