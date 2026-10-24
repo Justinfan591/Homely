@@ -1,42 +1,43 @@
 # Molsters
 
-Molsters connects homeowners with local repair pros.
+Molsters runs **Scope**: point your phone at a home problem, get it fixed.
 
-1. A customer opens a job with an address, ZIP code and photos of the problem.
-2. A Claude-powered assistant looks at the photos. It can ask for more shots or follow-up details.
-3. It writes a job report: category, urgency, likely cause and cost range.
-4. The job goes one of two ways:
-   - It goes on an open board, where matching providers (by trade and ZIP) can accept it.
-   - It goes to a support agent, who reviews it and assigns a provider.
-5. The job moves through *en route*, *in progress* and *completed*. Everyone on the job can message each other.
+1. The homeowner taps **Scan a problem** and the app guides the photos one shot at a time. Claude checks each one.
+2. A few tap-to-answer questions, then Claude writes a **JobSpec** (severity, area, confidence). It never prices.
+3. The price comes from the provider's rate card (±15%), and the best-matched pros nearby are offered.
+4. The homeowner books a pro and asks for a time. The pro accepts on the **`/pro` dashboard** (laptop), confirming the time and price.
+5. The phone tracks the job (booked → on the way → done) and the homeowner rates it.
 
-Molsters is a **mobile app** you run on your iPhone with **Expo Go**. It has three parts:
+It has four parts:
 
 | Folder | What it is |
 | --- | --- |
-| `mobile/` | The app: Expo SDK 58, React Native, Expo Router. All screens for customers, pros and support agents. |
-| repo root | The API server: Next.js 15 route handlers, SQLite via better-sqlite3 + Drizzle, Claude via the Anthropic SDK. It runs on your computer and the phone talks to it over Wi-Fi. |
-| `shared/` | Types and schemas used by both. |
+| `mobile/` | The homeowner app: Expo SDK 58, React Native, Expo Router. Runs in **Expo Go** on your iPhone. |
+| repo root | The API server and the `/pro` dashboard: Next.js 15, SQLite via better-sqlite3 + Drizzle, Claude via the Anthropic SDK. It runs on your computer and the phone talks to it over Wi-Fi. |
+| `shared/` | Types, pricing and the typed API client (`scope-client.ts`) used by the server, the app and `/pro`. |
+| `templates/` | Trade templates (`mold.json`, `plumbing_sink.json`). Server and app read the same files. |
 
 The Claude API key, database and photos stay on your computer. They're never shipped inside the app.
+
+The older open-board API (`/api/jobs`, support agents, messaging) is still in the server, but no screen uses it any more.
 
 ---
 
 ## Scope: the homeowner flow (SOON26)
 
-The **customer** side of the app now runs the Scope flow from `SOON26.md`. The older open-board flow above still exists for the provider and agent screens.
+The Scope flow from `SOON26.md`, as the server implements it. The app in `mobile/` uses it through `mobile/src/services/http.ts`.
 
 1. **Home**: a big **Scan a problem** button, with the Home Record (every scan and job for this home) below it.
 2. **Scan**: full-screen camera, one shot at a time from the trade template. Claude (`claude-sonnet-5-5`, JSON-only, validated with zod) checks each photo. Blurry, dark, wrong subject, or a face or document in frame means a retake. Optional shots can be skipped with a reason ("There's no wall next to it").
 3. **Clarify**: the template's questions as tap chips, plus an optional note.
 4. **Spec**: Claude writes the JobSpec (title, summary, severity 1-5, area m², confidence 0-1, template fields). It never prices. The price is `(base + per_m2 × area) × severity_multiplier[severity-1]`, ±15%, from the provider's rate card, labelled "Estimate — confirmed by provider".
-5. **Matching**: providers for the trade within their radius, best rating first, then shortest ETA. **Book [Provider] · [time]** sends the spec to that pro.
+5. **Matching**: providers for the trade within their radius, best rating first, then shortest ETA. **Book [Provider] · [time]** sends the spec to that pro with the time the homeowner asked for. The pro confirms that time or picks another.
 6. **Track**: polls every 2 s. Waiting → booked (slot + confirmed price) → on the way (ETA countdown) → done → 5-star rating, which updates the provider's rating.
 7. **Fallbacks**: confidence under 0.6 goes straight to human review with the spec attached. If no provider is in range, the homeowner can book a virtual call (Mold Busters for mold). If a pro declines, the next pro is offered.
 
 **Adding a trade means adding a file** to `templates/` (`mold.json` and `plumbing_sink.json` ship). The format is checked by `templateSchema` in `shared/scope.ts`, and templates are re-read on every request in dev.
 
-**Demo data**: `npm run db:seed` creates five providers around `DEMO_LAT`/`DEMO_LNG` (default: downtown Montreal) and a "Demo house" for `customer@demo.com`. Northshore Mold Co is deliberately out of range. To move the demo to the venue, set both variables and run the seed again. Rate cards and ratings are kept. New homeowner accounts set their home with **Use my current location**.
+**Demo data**: `npm run db:seed` creates five providers around `DEMO_LAT`/`DEMO_LNG` (default: downtown Montreal) and a "Demo house" for `customer@demo.com`. Northshore Mold Co is deliberately out of range. To move the demo to the venue, set both variables and run the seed again. Rate cards and ratings are kept. Other homeowner accounts set their home with `PUT /api/home`.
 
 ### Connecting a UI
 
@@ -72,19 +73,22 @@ Every action returns the full `ScanResponse` unless noted. Render the screen fro
 | Pick trade | | `GET /api/templates`, then `POST /api/scans { trade }` → `{ id }` |
 | Scan | `scan.status = capturing` | Next shot = `remainingShots[0]` (prompt in `template.required_shots`). `POST /api/scans/:id/shots` (form: `shotId`, `photo`) → `ShotResult`; `ok:false` means show `message` and retake. Optional shots: `POST /skip { shotId }` → `ShotResult`. |
 | Clarify | `clarifying` | `POST /finish { answers: { [questionId]: option }, notes? }`. During an ask-for-more, only `scan.focus.questionIds` are asked. |
-| Spec | `spec_ready`, or `job.status = declined` | `spec`, `matches[]` (ranked, each with `quote` and `slots`). `POST /book { providerId }`, `POST /human`. If `matches` is empty: `POST /virtual-call`. |
-| Track | `submitted` | `job.status`: `pending` · `handoff` · `virtual_call` · `accepted` (slot, price) · `en_route` (`eta`) · `done` → `POST /rate { stars }` · `more_info` → `POST /reopen`, then back to Scan/Clarify. `POST /cancel` any time before accepted. |
+| Spec | `spec_ready`, or `job.status = declined` | `spec`, `matches[]` (ranked, each with `quote` and `slots`). `POST /book { providerId, slot? }` (`slot` = a `slots[].startsAt`, the requested time), `POST /human`. If `matches` is empty: `GET /api/slots`, then `POST /virtual-call { slot? }`. |
+| Track | `submitted` | `job.status`: `pending` (`requestedSlot`) · `handoff` · `virtual_call` · `accepted` (slot, price) · `en_route` (`eta`) · `done` → `POST /rate { stars }` · `more_info` → `POST /reopen`, then back to Scan/Clarify. `POST /cancel` any time before accepted. |
 
 All paths are under `/api/scans/:id`. `shared/scope.ts` has the labels (`JOB_STATUS_LABELS`, `ESTIMATE_LABEL`, `slotLabel`, `priceRange`).
 
-#### End-to-end test
+#### End-to-end tests
 
 ```bash
 npm run dev:fake      # terminal 1 (or npm run dev for real Claude)
-npm run test:e2e      # terminal 2; E2E_BASE_URL=http://localhost:3001 for another port
+npm run test:e2e      # terminal 2: the API, every flow (E2E_BASE_URL=http://localhost:3001 for another port)
+npm run e2e           # terminal 2: the phone app's client + the /pro dashboard together
 ```
 
-It drives every flow through the same client a UI uses:
+`npm run e2e` runs the app's real API client (`mobile/src/services/http.ts`) as the homeowner and submits the `/pro` page's forms as the provider. It covers: a retake, a skip, booking with a requested time, ask for more (a shot and a question), accept (including an out-of-range price), en route, done, rating, decline → next pro → virtual call, talk to a person, cancel, the second trade and a rate-card change. It deletes its scans afterwards.
+
+`npm run test:e2e` drives every flow through the typed client:
 
 - happy path with a retake, skip, booking, accept, en route, done and rating;
 - ask for more;
@@ -105,8 +109,8 @@ The dashboard picks its provider with `?provider=<id>` (the seed prints the ids;
 | Method | Path | Body | Does |
 | --- | --- | --- | --- |
 | GET | `/api/pro/providers` | | All providers (for a picker) |
-| GET | `/api/pro/queue` | | Tabs `new` (pending) · `review` (handoff, virtual_call) · `active` (accepted, en_route) · `done`. Each card has trade, title, severity, area, confidence, distance, age and a quote **priced with this provider's current rate card**. Poll every 2 s. |
-| GET | `/api/pro/jobs/:id` | | Spec detail: photos labelled by shot, summary, fields, answers, notes, quote, 3 time slots. The exact address appears once the job is this provider's. |
+| GET | `/api/pro/queue` | | Tabs `new` (pending, and more_info while the homeowner answers) · `review` (handoff, virtual_call) · `active` (accepted, en_route) · `done`. Each card has trade, title, severity, area, confidence, distance, age and a quote **priced with this provider's current rate card**. Poll every 2 s. |
+| GET | `/api/pro/jobs/:id` | | Spec detail: photos labelled by shot, summary, fields, answers, notes, quote, and time slots (the homeowner's requested time first, `id: "requested"`). The exact address appears once the job is this provider's. |
 | POST | `/api/pro/jobs/:id/accept` | `{ slot: ISO, price }` | Price must be inside the quote range. → `accepted`; the phone shows the booking. |
 | POST | `/api/pro/jobs/:id/ask-more` | `{ shotIds, questionIds, message? }` | → `more_info`. The phone rescans only those items; the job then returns to `new` with a new spec version. |
 | POST | `/api/pro/jobs/:id/decline` | | → `declined`; the phone offers the next pro or a virtual call. |
@@ -199,30 +203,28 @@ npm install
 
 4. Scan the QR code with the iPhone's **Camera** app and tap the banner to open it in Expo Go.
 5. When iOS asks whether Expo Go can **find devices on your local network**, tap **Allow**. Without it the app can't reach the server.
-6. There's no sign-in for the live demo. The app opens signed in as the demo homeowner. Tap **Switch** (top right) to pick another demo account with one tap. That screen also shows which server address the app is using.
+6. There's no sign-in for the live demo. The app signs in as the demo homeowner (`customer@demo.com`, with the seeded "Demo house") by itself.
 
-The app finds the server automatically. It uses the computer address that Expo Go loaded the app from, on port 3000. To use a different server, create `mobile/.env` with `EXPO_PUBLIC_API_URL=http://<ip>:3000` and restart `npx expo start`.
+The app finds the server automatically. It uses the computer address that Expo Go loaded the app from, on port 3000. To use a different server, create `mobile/.env` with `EXPO_PUBLIC_API_URL=http://<ip>:3000` and restart `npx expo start`. To work on the UI without a server, set `EXPO_PUBLIC_SCOPE_API=mock` instead: the app then runs on the in-memory mock in `mobile/src/services/mock`.
 
 #### Windows: allow Node through the firewall
 
 The first time, Windows may show a firewall prompt for Node.js. Tick **Private networks** and allow it. If you missed the prompt, run this once in an **administrator** PowerShell:
 
 ```powershell
-New-NetFirewallRule -DisplayName "Node.js (Molsters dev)" -Direction Inbound -Program "C:\Program Files
-odejs
-ode.exe" -Action Allow -Profile Private
+New-NetFirewallRule -DisplayName "Node.js (Molsters dev)" -Direction Inbound -Program "C:\Program Files\nodejs\node.exe" -Action Allow -Profile Private
 ```
 
 This covers both the API (port 3000) and Expo's dev server (port 8081). Your Wi-Fi must be set to a **Private** network in Windows settings.
 
 ### 7. Open the provider dashboard on your laptop
 
-Open <http://localhost:3000/pro> and pick a provider, or go straight to `http://localhost:3000/pro?provider=<id>`. There's no sign-in: the `?provider=` id picks who you are, so only run this on a network you trust.
+Open <http://localhost:3000/pro> and pick a provider, or go straight to `http://localhost:3000/pro?provider=<id>` (the seed prints the ids; Mold Busters is `1`). There's no sign-in: the `?provider=` id picks who you are, so only run this on a network you trust.
 
 | Tab | What it does |
 | --- | --- |
-| New / Needs review / Active / Done | The provider's queue. *Needs review* holds handoff and low-confidence jobs. |
-| Spec (click a card) | Photos by shot, AI summary, answers, and the price from the rate card. **Accept** (time slot + price within ±15%), **Ask for more** (the homeowner gets a request on their phone), **Decline**. Handoff jobs can also be booked as a virtual call. |
+| New / Needs review / Active / Done | The provider's queue: trade, severity, area, price range, distance, confidence and age. *Needs review* holds handoffs (low confidence, or the homeowner asked for a person) and virtual calls. Jobs waiting on the homeowner stay in *New*, badged. |
+| Spec (click a card) | Photos by shot, AI summary, extracted fields, answers, notes and the price from your rate card. **Accept** (the homeowner's requested time is pre-selected; price within ±15%), **Ask for more** (pick template shots and questions, or write a request; the homeowner gets it on their phone), **Decline**. Handoffs can be routed to a virtual call. |
 | Active job | Status stepper and an **Add to Google Calendar** link. Advancing the status updates the homeowner's screen. |
 | Rate card | `base`, `per_m2` and the severity multipliers. Saving re-prices every spec. |
 
@@ -232,27 +234,25 @@ The page refreshes every 3 seconds.
 
 ## Demo accounts
 
-Every demo account uses the password **`password123`**.
+The app signs in as **`customer@demo.com`** (password **`password123`**). The seed also prints the Scope providers and their `/pro` ids:
 
-| Email | Role | Notes |
+| `/pro?provider=` | Provider | Notes |
 | --- | --- | --- |
-| `customer@demo.com` | Customer | Creates jobs. The app signs in as this account on first launch. |
-| `agent@demo.com` | Support agent | Reviews and assigns jobs |
-| `mold@demo.com` | Provider (Mold Busters) | Serves ZIPs 94110, 94103, 94114 |
-| `plumber@demo.com` | Provider (plumbing) | Serves ZIPs 94110, 94103, 94114 |
-| `electrician@demo.com` | Provider (electrical) | Serves ZIPs 94110, 94103 |
-| `hvac@demo.com` | Provider (HVAC) | Serves ZIPs 10001, 10011 |
+| `1` | Mold Busters | Mold. Takes virtual calls when nobody else is in range. |
+| `2` | ClearSpore Remediation | Mold. Smaller radius. |
+| `3` | Northshore Mold Co | Mold. Deliberately out of range. |
+| `4` | Clearwater Plumbing | Leaking sink. Takes virtual calls. |
+| `5` | Pipeline Pros | Leaking sink. |
 
-You can also sign up in the app as a new customer or pro ("I'm a pro" on the sign-up screen). Agent accounts only come from the seed script.
+The seed still creates the older accounts (`agent@demo.com`, `plumber@demo.com`, `electrician@demo.com`, `hvac@demo.com`) for the open-board API.
 
 ### Try the full flow
 
-1. On the phone (already the homeowner), start a new job. Use ZIP **94110** and upload a few photos of a leak or similar problem.
-2. Answer the AI assistant's questions until it produces a job report.
-3. On the laptop, open `/pro` as **Mold Busters** (mold) or **Rivera Plumbing** (plumbing) and accept the job. Or tap **Switch** on the phone and accept it as that provider.
-   - Or send the job to a person, then sign in as **agent@demo.com** to assign it.
-   - Open jobs that nobody claims within 15 minutes also show up in the agent's queue.
-4. As the provider, move the job through en route, in progress and completed. Message the customer along the way.
+1. On the phone, tap **Scan a problem** → **Mold or damp spot**, take the photos and answer the questions.
+2. Book **Mold Busters** and pick a time.
+3. On the laptop, open `/pro?provider=1`. The job is in **New** with your time pre-selected. Try **Ask for more**: the phone shows a banner, rescans only what was asked and sends the updated spec back.
+4. **Accept**, then **On my way** and **Mark done**. The phone follows each step. Rate the job on the phone.
+5. Other paths: **Decline** (the phone offers the next pro), **Talk to a person instead** on the estimate screen (lands in *Needs review*), and **Cancel request** while waiting.
 
 ---
 
@@ -262,12 +262,11 @@ You can also sign up in the app as a new customer or pro ("I'm a pro" on the sig
 | --- | --- |
 | `npm run dev` | Start the API server on port 3000, reachable from your phone |
 | `npm run dev:fake` | Same, with the fake AI (no API key or credits needed) |
-| `npm run test:e2e` | End-to-end test of the Scope flow against a running server |
+| `npm run test:e2e` | End-to-end test of the Scope API (every flow) against a running server |
 | `npm run mobile` | Start the Expo dev server (same as `cd mobile && npx expo start`) |
 | `npm run build` | Build for production |
 | `npm start` | Run the production API build (run `npm run build` first) |
-| `npx tsx lib/pricing.test.ts` | Check the deterministic pricing |
-| `npm run e2e` | End-to-end test of the phone + `/pro` flow against the running server. Add `-- --ai` to include a real Claude intake. Cleans up after itself. |
+| `npm run e2e` | End-to-end test of the phone app's client + the `/pro` dashboard against a running server. Cleans up after itself. |
 | `npm run typecheck` | Check the server's types (`cd mobile && npm run typecheck` for the app) |
 | `npm run lint` | Run ESLint |
 | `npm run setup` | Run `db:push` and then `db:seed` |
@@ -277,9 +276,9 @@ You can also sign up in the app as a new customer or pro ("I'm a pro" on the sig
 ## Where data lives
 
 - **Database:** `data/molsters.db`, a SQLite file. It isn't committed to git.
-- **Uploaded photos:** `uploads/job-<id>/`. Not committed either. Limits: 8 MB per photo, 12 photos per job, and JPEG, PNG, WebP or GIF only.
+- **Uploaded photos:** `uploads/scan-<id>/` (and `uploads/job-<id>/` for the older API). Not committed either. Limits: 8 MB per photo, and JPEG, PNG, WebP or GIF only. The app converts photos to JPEG before uploading.
 
-**To start fresh:** stop the server, delete `data/molsters.db` and any `data/molsters.db-*` files (plus `uploads/job-*` if you want), then run `npm run setup` again.
+**To start fresh:** stop the server, delete `data/molsters.db` and any `data/molsters.db-*` files (plus `uploads/scan-*` and `uploads/job-*` if you want), then run `npm run setup` again.
 
 ## Troubleshooting
 
@@ -289,10 +288,10 @@ You can also sign up in the app as a new customer or pro ("I'm a pro" on the sig
   - Expo Go has Local Network access (iPhone Settings → Expo Go).
   - The Windows firewall allows Node (see step 6).
 
-  To test the network, open `<server address shown on sign-in>/api/auth/me` in Safari on the phone. A `Please sign in` message means the network is fine.
+  The error message shows the server address the app is using. To test the network, open `<that address>/api/health` in Safari on the phone. A short JSON reply means the network is fine.
 - **`npx expo start --tunnel` doesn't reach the server.** A tunnel only forwards the app bundle, not the API. Use the same Wi-Fi, or set `EXPO_PUBLIC_API_URL` to an address the phone can reach.
 - **Every request fails with an error about `SESSION_SECRET`.** The value in `.env.local` is missing or shorter than 32 characters. Fix it and restart `npm run dev`.
-- **"AI assistant isn't configured" during intake.** Set `ANTHROPIC_API_KEY` in `.env.local` and restart the dev server. Env files are only read at startup.
+- **"AI assistant isn't configured" during a scan.** Set `ANTHROPIC_API_KEY` in `.env.local` and restart the dev server (env files are only read at startup), or use `npm run dev:fake`.
 - **Port 3000 is already in use.** Run `npm run dev -- -p 3001` and open http://localhost:3001.
 - **Requests return 500 with errors like `routes-manifest.json` / `_document.js` not found, or `Cannot find module './vendor-chunks/...'`.** The `.next` build folder is out of date or corrupted. This usually happens when `next build` and `next dev` ran at the same time. Stop every running server, delete the `.next` folder, and start `npm run dev` again.
 - **"no such table" errors.** You skipped step 3. Run `npm run setup`.
