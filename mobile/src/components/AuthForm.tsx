@@ -57,7 +57,7 @@ export function AuthForm({ mode }: { mode: "login" | "signup" }) {
               onChange={setRole}
               options={[
                 { value: "customer", label: "I need help" },
-                { value: "provider", label: "I'm a pro" },
+                { value: "provider", label: "I'm a provider" },
               ]}
             />
           )}
