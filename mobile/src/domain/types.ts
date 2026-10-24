@@ -27,6 +27,8 @@ export type TradeTemplate = {
   areaLabel: string;
   /** Display names for the spec's output fields. */
   outputLabels: Record<string, string>;
+  /** Set when the homeowner may describe it instead of taking photos (hidden mold). */
+  noPhotos?: { title: string; prompt: string };
 };
 
 export type Photo = { shotId: string; uri: string; ok: boolean };

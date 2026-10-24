@@ -163,6 +163,8 @@ export function createScopeClient(options: ScopeClientOptions = {}) {
       },
       /** Skip an optional shot (show the shot's `skip_label` as the button). */
       skipShot: (scanId: number, shotId: string) => call<ShotResult>(scanPath(scanId, "skip"), { body: { shotId } }),
+      /** Templates with `no_photos` (mold): skip every shot and describe the symptoms and where instead. Goes straight to the questions. */
+      describeInstead: (scanId: number, description: string) => call<ScanResponse>(scanPath(scanId, "describe"), { body: { description } }),
       /** Tap answers + optional note → JobSpec. Takes a few seconds with real AI. */
       finish: (scanId: number, answers: Record<string, string>, notes?: string | null) => call<ScanResponse>(scanPath(scanId, "finish"), { body: { answers, notes } }),
       /** "Get offers": sends the spec to every matching pro at once. `slot` is an optional preferred `startsAt`. Poll `scan()` for `offers`. */

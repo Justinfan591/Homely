@@ -14,7 +14,7 @@ import Animated, {
 } from "react-native-reanimated";
 import type { TradeId } from "@/domain/types";
 import { allArt, tradeArt } from "@/templates/art";
-import { colors, fonts, radius, shadow } from "@/theme";
+import { colors, fonts, maxWidth, radius, shadow } from "@/theme";
 import { haptic } from "./haptics";
 import { Icon } from "./Icon";
 import { Text } from "./Text";
@@ -50,10 +50,15 @@ const PILE: [number, number, number, number, number][] = [
   [221, 415, 176, -10, 5500],
 ];
 
+/** How much to scale the design's 390 px sizes on this screen: about 1 on phones, up to ~1.5 on an iPad. */
+export function useScale() {
+  const { width } = useWindowDimensions();
+  return Math.min(width, maxWidth) / 390;
+}
+
 /** The floating cluster of trade icons above "What needs fixing?" / "Home fixes, handled." */
 export function ArtPile({ count = 8, style }: { count?: number; style?: StyleProp<ViewStyle> }) {
-  const { width } = useWindowDimensions();
-  const k = Math.min(width, 480) / 390;
+  const k = useScale();
   return (
     <View pointerEvents="none" accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={[{ flex: 1, overflow: "visible" }, style]}>
       {PILE.slice(0, count).map(([left, top, w, rot, delay], i) => (

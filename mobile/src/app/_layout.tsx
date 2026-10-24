@@ -3,13 +3,14 @@ import { Stack } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import { StatusBar } from "expo-status-bar";
 import { useEffect } from "react";
+import { View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { SWRConfig } from "swr";
 import { FollowUpNotifier } from "@/components/FollowUpNotifier";
 import { HomeProvider } from "@/hooks/home";
 import { SessionProvider, useSession } from "@/hooks/session";
-import { colors } from "@/theme";
+import { colors, maxWidth } from "@/theme";
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
 
@@ -24,7 +25,10 @@ export default function RootLayout() {
           <SessionProvider>
             <HomeProvider>
               <StatusBar style="dark" />
-              <Routes />
+              {/* iPad and web: one centred column at most `maxWidth` wide, so the phone design scales instead of stretching. */}
+              <View style={{ flex: 1, width: "100%", maxWidth, alignSelf: "center" }}>
+                <Routes />
+              </View>
             </HomeProvider>
           </SessionProvider>
         </SWRConfig>

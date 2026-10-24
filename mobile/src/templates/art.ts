@@ -21,6 +21,9 @@ const CATEGORY: Record<string, string> = {
 
 export const tradeArt = (trade: TradeId) => ART[trade] ?? ART.handyman;
 
+/** Trades that live behind "Other" on the service grid instead of a tile of their own. Voice and "Other" can still pick them. */
+export const OFF_GRID = new Set<TradeId>(["locksmith"]);
+
 export const tradeCategory = (trade: TradeId, fallback: string) => CATEGORY[trade] ?? fallback;
 
 /** Every icon, in the order the floating clusters use them. */

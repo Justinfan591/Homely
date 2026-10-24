@@ -249,8 +249,12 @@ export async function generateSpec(input: SpecInput): Promise<GeneratedSpec> {
     content.push(imageBlock(p.image));
     content.push({ type: "text", text: "</photo>" });
   }
+  if (!input.photos.length) {
+    content.push({ type: "text", text: "None: the homeowner can't see the problem and described it instead. Work from their description and keep confidence low." });
+  }
   content.push({ type: "text", text: "</photos>" });
-  const skipped = input.skippedShots.map((id) => {
+  // No photos at all: every shot was skipped at once, so the skip reasons say nothing.
+  const skipped = (input.photos.length ? input.skippedShots : []).map((id) => {
     const s = t.required_shots.find((x) => x.id === id);
     return `- "${s?.prompt ?? id}": ${s?.skip_label ?? "skipped"}`;
   });

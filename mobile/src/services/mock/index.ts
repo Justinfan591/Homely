@@ -377,6 +377,16 @@ export const mockApi: ScopeApi = {
       return structuredClone(scan);
     }),
 
+  describeInstead: (scanId, description) =>
+    call("describeInstead", 200, () => {
+      const scan = need(scans.get(scanId), "Scan");
+      scan.skipped = [...scan.pendingShotIds];
+      scan.pendingShotIds = [];
+      scan.description = [scan.description, description.trim()].filter(Boolean).join("\n\n");
+      outcomes.delete(scanId);
+      return structuredClone(scan);
+    }),
+
   markPhoto: (scanId, shotId, x, y) =>
     call("markPhoto", 200, () => {
       const scan = need(scans.get(scanId), "Scan");

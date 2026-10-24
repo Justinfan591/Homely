@@ -1,10 +1,11 @@
 import { Redirect, router } from "expo-router";
-import { Pressable, StyleSheet, View } from "react-native";
+import { Pressable, ScrollView, StyleSheet, View } from "react-native";
 import Animated, { FadeIn } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { ArtPile, Avatar, TradeArt } from "@/components/Design";
+import { Button } from "@/components/Button";
+import { Avatar, TradeArt } from "@/components/Design";
 import { haptic } from "@/components/haptics";
-import { Icon } from "@/components/Icon";
+import { ServiceGrid } from "@/components/ServiceGrid";
 import { Text } from "@/components/Text";
 import { windowLabel } from "@/domain/format";
 import type { RecordItem } from "@/domain/types";
@@ -35,54 +36,22 @@ export default function Home() {
     router.push("/tell");
   }
 
-  function snap() {
-    haptic.tap();
-    resetIntake();
-    router.push({ pathname: "/tell/pick", params: { mode: "photo" } });
-  }
-
   return (
-    <View style={[styles.screen, { paddingTop: insets.top }]}>
+    <ScrollView style={styles.screen} contentContainerStyle={{ paddingTop: insets.top + 24, paddingHorizontal: gutter, paddingBottom: 24 }}>
       {next ? (
-        <Animated.View entering={FadeIn.duration(300)} style={{ flex: 1, paddingTop: 32 }}>
+        <Animated.View entering={FadeIn.duration(300)}>
           <Text variant="display" accessibilityRole="header">
             Up next
           </Text>
           <UpNext item={next} />
         </Animated.View>
-      ) : (
-        <ArtPile style={{ marginHorizontal: -gutter }} />
-      )}
-
-      {next ? null : (
-        <Text variant="hero" accessibilityRole="header" style={{ marginTop: 32, marginBottom: 28 }} numberOfLines={1} adjustsFontSizeToFit>
-          What needs fixing?
-        </Text>
-      )}
-      <View style={styles.actions}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={next ? "Something else? Tell us what's wrong" : "Tell us what's wrong"}
-          disabled={!home}
-          onPress={tell}
-          style={({ pressed }) => [styles.tell, (pressed || !home) && { opacity: 0.8 }]}
-        >
-          <Icon name="mic" size={22} color={colors.white} />
-          <Text variant="bodyStrong" tone="white">
-            {next ? "Something else?" : "Tell us what's wrong"}
-          </Text>
-        </Pressable>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Snap a photo instead"
-          disabled={!home}
-          onPress={snap}
-          style={({ pressed }) => [styles.snap, shadow, pressed && { backgroundColor: colors.fillPressed }]}
-        >
-          <Icon name="camera" size={24} />
-        </Pressable>
-      </View>
-    </View>
+      ) : null}
+      <Text variant={next ? "title" : "hero"} accessibilityRole="header" style={{ marginBottom: 24 }} numberOfLines={1} adjustsFontSizeToFit>
+        {next ? "Something else?" : "What needs fixing?"}
+      </Text>
+      <ServiceGrid description={null} />
+      <Button label="Or tell us what's wrong" variant="secondary" icon="mic" onPress={tell} disabled={!home} style={{ marginTop: 20 }} />
+    </ScrollView>
   );
 }
 
@@ -138,19 +107,7 @@ function UpNext({ item }: { item: RecordItem }) {
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.bg, paddingHorizontal: gutter },
-  actions: { flexDirection: "row", gap: 20, marginBottom: 12 },
-  tell: {
-    flex: 1,
-    height: 64,
-    borderRadius: radius.pill,
-    backgroundColor: colors.ink,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 10,
-  },
-  snap: { width: 64, height: 64, borderRadius: radius.pill, backgroundColor: colors.card, alignItems: "center", justifyContent: "center" },
+  screen: { flex: 1, backgroundColor: colors.bg },
   card: { marginTop: 24, marginBottom: 24, padding: 24, borderRadius: radius.xl, backgroundColor: colors.card, flexShrink: 1 },
   cardArt: { alignItems: "center", marginBottom: 8 },
   who: { flexDirection: "row", alignItems: "center", gap: 10, marginTop: 14 },

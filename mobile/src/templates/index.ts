@@ -20,6 +20,7 @@ type RawTemplate = {
   notes?: { prompt: string };
   outputs: string[];
   output_labels?: Record<string, string>;
+  no_photos?: { title: string; prompt: string };
 };
 
 function load(raw: RawTemplate): TradeTemplate {
@@ -40,6 +41,7 @@ function load(raw: RawTemplate): TradeTemplate {
     notesPrompt: raw.notes?.prompt ?? "Anything else a pro should know?",
     outputs: raw.outputs,
     outputLabels: raw.output_labels ?? {},
+    noPhotos: raw.no_photos,
   };
 }
 
