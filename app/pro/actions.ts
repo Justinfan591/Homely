@@ -3,19 +3,30 @@ import { redirect } from "next/navigation";
 import { z, ZodError } from "zod";
 import type { Provider } from "@/db/schema";
 import { HttpError } from "@/lib/auth";
-import { accept as acceptJob, advance as advanceJob, askForMore, decline as declineJob, providerById, routeToVirtualCall, saveRateCard } from "@/lib/scope/pro";
+import { revoke } from "@/lib/scope/calendar";
+import {
+  accept as acceptJob,
+  addToCalendar,
+  advance as advanceJob,
+  askForMore,
+  decline as declineJob,
+  providerById,
+  routeToVirtualCall,
+  saveGoogle,
+  saveRateCard,
+} from "@/lib/scope/pro";
 import { rateCardSchema } from "@/shared/scope";
 import { proHref } from "./href";
 
 type Next = Parameters<typeof proHref>[1];
 
 /** Runs `fn` for the form's provider and job, then redirects to the page it returns (or back with the error). */
-async function act(form: FormData, fn: (p: Provider, jobId: number) => Next) {
+async function act(form: FormData, fn: (p: Provider, jobId: number) => Next | Promise<Next>) {
   const provider = Number(form.get("provider"));
   const jobId = Number(form.get("job"));
   let next: Next;
   try {
-    next = fn(providerById(provider), jobId);
+    next = await fn(providerById(provider), jobId);
   } catch (err) {
     if (!(err instanceof HttpError || err instanceof ZodError)) throw err;
     if (err instanceof HttpError && err.message.startsWith("Add ?provider")) redirect("/pro");
@@ -28,10 +39,16 @@ async function act(form: FormData, fn: (p: Provider, jobId: number) => Next) {
 const acceptBody = z.object({ slot: z.string({ error: "Pick a time slot." }).min(1, "Pick a time slot."), price: z.coerce.number() });
 
 export async function accept(form: FormData) {
-  await act(form, (p, jobId) => {
+  await act(form, async (p, jobId) => {
     const { slot, price } = acceptBody.parse(Object.fromEntries(form));
     acceptJob(p, jobId, { slot, price });
-    return { tab: "active", job: jobId };
+    // The booking stands either way; without Google the pro still has the add-to-calendar link.
+    try {
+      const link = await addToCalendar(p, jobId);
+      return { tab: "active", job: jobId, notice: link ? "Booked and added to your Google Calendar." : undefined };
+    } catch (err) {
+      return { tab: "active", job: jobId, error: `Booked, but it couldn't go into Google Calendar: ${err instanceof Error ? err.message : err}` };
+    }
   });
 }
 
@@ -86,4 +103,17 @@ export async function saveRates(form: FormData) {
   if (!parsed.success) redirect(proHref(provider, { tab: "rates", error: "Rates must be numbers of 0 or more (multipliers up to 20)." }));
   saveRateCard(p, parsed.data);
   redirect(proHref(provider, { tab: "rates", saved: true }));
+}
+
+export async function disconnectGoogle(form: FormData) {
+  const provider = Number(form.get("provider"));
+  let p: Provider;
+  try {
+    p = providerById(provider);
+  } catch {
+    redirect("/pro");
+  }
+  if (p.googleRefreshToken) await revoke(p.googleRefreshToken);
+  saveGoogle(p, null);
+  redirect(proHref(provider, { notice: "Google Calendar disconnected." }));
 }

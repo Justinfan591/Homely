@@ -14,6 +14,7 @@ import {
   type RateCard,
   type Slot,
 } from "@/shared/scope";
+import { addEvent, googleConfig } from "./calendar";
 import { distanceKm, etaMinutes, slotsFor, virtualPartner } from "./matching";
 import { bestPhotos, jobInfo, moveJob, parseSlot, photoInfo, scanInfo, scanPhotoRows, specInfo } from "./service";
 import { getTemplate } from "./templates";
@@ -117,7 +118,32 @@ export function jobDetail(p: Provider, jobId: number): ProJobDetail {
     quote: quote(p.rateCard, spec),
     slots: withRequested(slotsFor(), job.requestedSlot),
     answers: template.questions.filter((q) => scan.answers[q.id]).map((q) => ({ id: q.id, q: q.q, answer: scan.answers[q.id] })),
+    calendarLink: job.providerId === p.id ? job.calendarLink : null,
   };
+}
+
+// ---------- Google Calendar ----------
+
+export function saveGoogle(p: Provider, g: { refreshToken: string; calendar: string } | null) {
+  db.update(providers).set({ googleRefreshToken: g?.refreshToken ?? null, googleCalendar: g?.calendar ?? null }).where(eq(providers.id, p.id)).run();
+}
+
+/** After accept: puts the visit in the pro's Google Calendar if they're connected. Returns the event link. */
+export async function addToCalendar(p: Provider, jobId: number): Promise<string | null> {
+  const cfg = googleConfig();
+  if (!cfg || !p.googleRefreshToken) return null;
+  const d = jobDetail(p, jobId);
+  if (!d.job.slot) return null;
+  const virtual = d.job.mode === "virtual";
+  const link = await addEvent(cfg, p.googleRefreshToken, {
+    summary: `${virtual ? "Virtual call" : "Visit"}: ${d.spec.title}`,
+    description: [`Scope job #${d.job.id} (${d.template.label})`, d.spec.summary, d.job.price != null ? `Confirmed price: $${d.job.price}` : null].filter(Boolean).join("\n\n"),
+    location: virtual ? "Virtual call" : d.home.address,
+    start: new Date(d.job.slot),
+    minutes: virtual ? 30 : 120,
+  });
+  db.update(scopeJobs).set({ calendarLink: link }).where(eq(scopeJobs.id, jobId)).run();
+  return link;
 }
 
 /** The homeowner's requested time goes first, so /pro pre-selects it. */
