@@ -42,10 +42,16 @@ export type Scan = {
   pendingShotIds: string[];
   answers: Record<string, string>;
   note: string;
+  /** What the homeowner said on the voice screen. */
+  description?: string | null;
+  /** The homeowner's dot on one photo, in % of its width and height. */
+  mark?: PhotoMark | null;
   createdAt: string;
   /** Set when a provider asked for more information. */
   followUp?: FollowUp;
 };
+
+export type PhotoMark = { shotId: string; x: number; y: number };
 
 /** A provider's "ask for more": the shots go in pendingShotIds, the questions are listed here. */
 export type FollowUp = { provider: string; message: string; questionIds?: string[] };
@@ -116,7 +122,14 @@ export type Job = {
   specId: string;
   scanId: string;
   homeId: string;
+  trade: TradeId;
+  /** The job's name, e.g. "Leak under the kitchen sink". */
+  title: string;
+  /** The home's address, for the booking details. */
+  address: string;
   providerName: string;
+  /** For "Message <pro>": null when the pro has no number or isn't chosen yet. */
+  providerPhone: string | null;
   providerRating: number | null;
   status: JobStatus;
   /** Confirmed time once accepted; before that, the time the homeowner asked for. */
@@ -165,6 +178,13 @@ export type RecordItem = {
   /** Active offers while the request is open, and the cheapest one. */
   offerCount?: number;
   bestOffer?: { price: number; provider: string } | null;
+  /** The pro on the job, once there is one. */
+  providerName?: string | null;
+  /** Booked (or requested) time. */
+  slot?: Slot | null;
+  slotConfirmed?: boolean;
+  /** Stars given, once rated. */
+  rating?: number | null;
 };
 
 export type SpecOutcome =
@@ -173,3 +193,23 @@ export type SpecOutcome =
   | { kind: "no_provider"; spec: JobSpec }
   /** Already sent to a pro (e.g. after answering an "ask for more"): show the job. */
   | { kind: "submitted"; spec: JobSpec; jobId: string };
+
+export const HOME_TYPES = ["Apartment", "House", "Condo", "Townhouse", "Other"] as const;
+
+/** The signed-in homeowner (Profile tab). */
+export type Profile = {
+  name: string;
+  email: string | null;
+  phone: string | null;
+  age: number | null;
+  address: string | null;
+  homeType: string | null;
+};
+
+export type ProfileUpdate = { name?: string; age?: number | null; address?: string; homeType?: string | null };
+
+/** "It sounds like Plumbing: A leak under the kitchen sink." */
+export type Classification = { trade: TradeId; label: string; summary: string };
+
+export const REVIEW_TAGS = ["On time", "Tidy", "Fair price", "Clear communication"] as const;
+export type Review = { stars: number; tags: string[]; note: string };

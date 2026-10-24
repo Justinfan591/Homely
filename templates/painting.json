@@ -1,0 +1,35 @@
+{
+  "trade": "painting",
+  "label": "Painting",
+  "description": "Repaint a room or wall, touch-ups, peeling or chipped paint.",
+  "icon": "brush",
+  "area_label": "Area to paint",
+  "required_shots": [
+    { "id": "room_wide", "prompt": "Show the whole wall or room", "tip": "Stand back so the ceiling and floor are in frame.", "hint": "The full wall or room to paint, to judge size." },
+    { "id": "surface_closeup", "prompt": "Get close to the surface", "tip": "Show any peeling, cracks or stains.", "hint": "A close-up of the paint condition: peeling, cracks, stains or the current finish." },
+    { "id": "trim", "prompt": "Show the trim, doors or ceiling to paint", "tip": "Skip if it's walls only.", "hint": "Trim, doors, ceiling or other surfaces that are part of the job.", "optional": true, "skip_label": "Walls only" }
+  ],
+  "questions": [
+    { "id": "rooms", "q": "How much is there to paint?", "options": ["One wall", "One room", "Several rooms", "Outside"] },
+    { "id": "condition", "q": "What's the surface like?", "options": ["Good, just a new colour", "Some peeling or cracks", "Lots of damage"] },
+    { "id": "paint", "q": "Do you have the paint?", "options": ["Yes", "No", "Not sure"], "optional": true }
+  ],
+  "notes": { "enabled": true, "prompt": "Anything else? (optional)" },
+  "outputs": ["affected_area_m2", "severity", "surfaces", "recommended_service"],
+  "output_labels": { "surfaces": "Surfaces", "recommended_service": "Recommended service" },
+  "severity_guide": [
+    "a small touch-up",
+    "one wall in good condition",
+    "a room, or a wall with some prep (filling cracks, scraping)",
+    "several rooms, or a lot of prep and repair",
+    "large exterior or whole-home work, or damaged surfaces needing repair first"
+  ],
+  "policy": {
+    "finding_wording": "Painting work as shown, on-site quote recommended.",
+    "rules": [
+      "Describe what is visible.",
+      "affected_area_m2 is the total surface to paint; estimate from doors (about 2 x 0.8 m) and ceiling height (about 2.4 m)."
+    ]
+  },
+  "virtual_call_label": "Book a virtual painting quote"
+}

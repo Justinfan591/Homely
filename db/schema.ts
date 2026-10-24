@@ -1,6 +1,6 @@
 import { sqliteTable, text, integer, real, unique } from "drizzle-orm/sqlite-core";
 import type { JobReport } from "@/shared/types";
-import type { MoreInfoRequest, PriceSuggestion, ProProfile, ProviderFit, RateCard } from "../shared/scope";
+import type { MoreInfoRequest, PhotoMark, PriceSuggestion, ProProfile, ProviderFit, RateCard } from "../shared/scope";
 import { JOB_STATUSES as SCOPE_JOB_STATUSES, OFFER_STATUSES, SCAN_STATUSES } from "../shared/scope";
 
 const now = () => new Date();
@@ -12,6 +12,8 @@ export const users = sqliteTable("users", {
   email: text("email").notNull().unique(),
   passwordHash: text("password_hash").notNull(),
   phone: text("phone"),
+  /** Optional, from the app's profile screen. */
+  age: integer("age"),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().$defaultFn(now),
 });
 
@@ -132,6 +134,8 @@ export const homes = sqliteTable("homes", {
   address: text("address").notNull(),
   lat: real("lat").notNull(),
   lng: real("lng").notNull(),
+  /** Apartment, House, Condo, Townhouse or Other (from sign-up). */
+  homeType: text("home_type"),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().$defaultFn(now),
 });
 
@@ -177,6 +181,10 @@ export const scans = sqliteTable("scans", {
   focus: text("focus", { mode: "json" }).$type<MoreInfoRequest>(),
   /** Focus shots already retaken or skipped. */
   focusDone: text("focus_done", { mode: "json" }).$type<string[]>().notNull().default([]),
+  /** What the homeowner said on the voice screen (transcribed), before the photos. */
+  description: text("description"),
+  /** Where the homeowner marked the problem on one photo, in % of its width and height. */
+  mark: text("mark", { mode: "json" }).$type<PhotoMark>(),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().$defaultFn(now),
   updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().$defaultFn(now),
 });
@@ -278,6 +286,8 @@ export const ratings = sqliteTable("ratings", {
     .unique()
     .references(() => scopeJobs.id),
   stars: integer("stars").notNull(),
+  tags: text("tags", { mode: "json" }).$type<string[]>().notNull().default([]),
+  note: text("note"),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().$defaultFn(now),
 });
 

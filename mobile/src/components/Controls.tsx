@@ -8,9 +8,9 @@ import Animated, {
   withSpring,
   withTiming,
 } from "react-native-reanimated";
-import { colors, radius } from "@/theme";
+import Svg, { Path } from "react-native-svg";
+import { colors, fonts, radius, shadow } from "@/theme";
 import { haptic } from "./haptics";
-import { Icon } from "./Icon";
 import { Text } from "./Text";
 
 export function Chip({ label, selected, onPress }: { label: string; selected: boolean; onPress: () => void }) {
@@ -24,57 +24,102 @@ export function Chip({ label, selected, onPress }: { label: string; selected: bo
       }}
       style={({ pressed }) => [
         styles.chip,
+        shadow,
         selected && styles.chipSelected,
         pressed && !selected && { backgroundColor: colors.fillPressed },
       ]}
     >
-      <Text variant="bodyStrong" style={{ color: selected ? colors.white : colors.ink }}>
+      <Text variant="label" style={{ color: selected ? colors.white : colors.ink, fontSize: 16 }}>
         {label}
       </Text>
     </Pressable>
   );
 }
 
-/** One dot per shot. Filled = captured, outlined = skipped, long = current. */
-export function ProgressDots({
-  steps,
-  current,
-  dark,
+/** A tall white row with a radio on the right; black when picked (Questions, Book · when). */
+export function ChoiceRow({
+  label,
+  detail,
+  selected,
+  onPress,
+  disabled,
 }: {
-  steps: { state: "done" | "skipped" | "todo" }[];
-  current: number;
-  dark?: boolean;
+  label: string;
+  /** Muted text after the label, e.g. "8 – 12". */
+  detail?: string;
+  selected: boolean;
+  onPress: () => void;
+  disabled?: boolean;
 }) {
   return (
-    <View style={styles.dots} accessibilityLabel={`Photo ${current + 1} of ${steps.length}`}>
-      {steps.map((s, i) => (
-        <Dot key={i} active={i === current} state={s.state} dark={dark} />
-      ))}
-    </View>
+    <Pressable
+      accessibilityRole="radio"
+      accessibilityState={{ selected, disabled: !!disabled }}
+      accessibilityLabel={detail ? `${label}, ${detail}` : label}
+      disabled={disabled}
+      onPress={() => {
+        haptic.select();
+        onPress();
+      }}
+      style={({ pressed }) => [
+        styles.choice,
+        shadow,
+        selected && { backgroundColor: colors.ink },
+        pressed && !selected && { backgroundColor: colors.fillPressed },
+        disabled && { opacity: 0.4 },
+      ]}
+    >
+      <Text variant="option" style={{ color: selected ? colors.white : colors.ink, flexShrink: 1 }}>
+        {label}
+      </Text>
+      {detail ? (
+        <Text variant="option" style={{ color: selected ? colors.inkFaint : colors.inkSoft, fontFamily: fonts.regular }}>
+          {detail}
+        </Text>
+      ) : null}
+      <View style={{ flex: 1 }} />
+      <View style={[styles.radio, { borderColor: selected ? colors.white : colors.ring }]}>
+        {selected ? <View style={styles.radioDot} /> : null}
+      </View>
+    </Pressable>
   );
 }
 
-function Dot({ active, state, dark }: { active: boolean; state: "done" | "skipped" | "todo"; dark?: boolean }) {
-  const w = useSharedValue(active ? 24 : 8);
-  useEffect(() => {
-    w.value = withSpring(active ? 24 : 8, { damping: 18, stiffness: 260 });
-  }, [active, w]);
-  const style = useAnimatedStyle(() => ({ width: w.value }));
-  const on = dark ? colors.white : colors.ink;
-  const off = dark ? "rgba(255,255,255,0.35)" : colors.line;
+/** One day in the "When works for you?" strip. */
+export function DayPill({ name, num, selected, onPress }: { name: string; num: number; selected: boolean; onPress: () => void }) {
   return (
-    <Animated.View
-      style={[
-        styles.dot,
-        style,
-        {
-          backgroundColor: state === "done" || active ? on : state === "skipped" ? "transparent" : off,
-          borderColor: state === "skipped" ? (dark ? "rgba(255,255,255,0.6)" : colors.inkFaint) : "transparent",
-          borderWidth: state === "skipped" && !active ? 1.5 : 0,
-          opacity: active || state !== "todo" ? 1 : 0.9,
-        },
-      ]}
-    />
+    <Pressable
+      accessibilityRole="radio"
+      accessibilityState={{ selected }}
+      accessibilityLabel={`${name} ${num}`}
+      onPress={() => {
+        haptic.select();
+        onPress();
+      }}
+      style={({ pressed }) => [styles.day, shadow, selected && { backgroundColor: colors.ink }, pressed && !selected && { backgroundColor: colors.fillPressed }]}
+    >
+      <Text variant="label" style={{ color: selected ? colors.inkFaint : colors.inkSoft }}>
+        {name}
+      </Text>
+      <Text variant="title" style={{ color: selected ? colors.white : colors.ink }}>
+        {num}
+      </Text>
+    </Pressable>
+  );
+}
+
+/** The design's rounded star, filled yellow when on. */
+export function Star({ size = 14, on = true }: { size?: number; on?: boolean }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24">
+      <Path
+        d="M12 2.8l2.8 5.9 6.4.8-4.7 4.4 1.2 6.4L12 17.2 6.3 20.3l1.2-6.4L2.8 9.5l6.4-.8z"
+        fill={on ? colors.star : "none"}
+        stroke={on ? colors.star : colors.ring}
+        strokeWidth={1.5}
+        strokeLinejoin="round"
+      />
+    </Svg>
   );
 }
 
@@ -89,44 +134,26 @@ export function SeverityBar({ level }: { level: number }) {
   );
 }
 
-export function Stars({ value, onChange, size = 40 }: { value: number; onChange?: (n: number) => void; size?: number }) {
+const STAR_NAMES = ["Poor", "Fair", "Good", "Great", "Excellent"];
+
+export function Stars({ value, onChange, size = 44 }: { value: number; onChange?: (n: number) => void; size?: number }) {
   return (
-    <View style={{ flexDirection: "row", gap: 6, justifyContent: "center" }}>
+    <View style={{ flexDirection: "row", gap: 8, justifyContent: "center" }}>
       {[1, 2, 3, 4, 5].map((n) => (
         <Pressable
           key={n}
           disabled={!onChange}
           accessibilityRole="button"
-          accessibilityLabel={`${n} star${n > 1 ? "s" : ""}`}
+          accessibilityLabel={`${n} star${n > 1 ? "s" : ""}: ${STAR_NAMES[n - 1]}`}
           hitSlop={4}
           onPress={() => {
             haptic.select();
             onChange?.(n);
           }}
         >
-          <Icon name="star" size={size} color={n <= value ? colors.ink : colors.line} />
+          <Star size={size} on={n <= value} />
         </Pressable>
       ))}
-    </View>
-  );
-}
-
-type PillTone = "neutral" | "accent" | "success" | "warn" | "danger";
-const pill: Record<PillTone, [string, string]> = {
-  neutral: [colors.white, colors.inkSoft],
-  accent: [colors.accentSoft, colors.accent],
-  success: [colors.successSoft, colors.success],
-  warn: [colors.warnSoft, colors.warn],
-  danger: [colors.dangerSoft, colors.danger],
-};
-
-export function Pill({ label, tone = "neutral" }: { label: string; tone?: PillTone }) {
-  const [bg, fg] = pill[tone];
-  return (
-    <View style={[styles.pill, { backgroundColor: bg }]}>
-      <Text variant="caption" style={{ color: fg, fontFamily: "Inter_500Medium" }}>
-        {label}
-      </Text>
     </View>
   );
 }
@@ -137,22 +164,40 @@ export function Skeleton({ height, width, radius: r = 12, style }: { height: num
     o.value = withRepeat(withSequence(withTiming(1, { duration: 700 }), withTiming(0.5, { duration: 700 })), -1);
   }, [o]);
   const anim = useAnimatedStyle(() => ({ opacity: o.value }));
-  return <Animated.View style={[{ height, width: width ?? "100%", borderRadius: r, backgroundColor: colors.fill }, anim, style]} />;
+  return <Animated.View style={[{ height, width: width ?? "100%", borderRadius: r, backgroundColor: "rgba(255,255,255,0.6)" }, anim, style]} />;
 }
 
 const styles = StyleSheet.create({
   chip: {
-    minHeight: 48,
-    paddingHorizontal: 20,
+    minHeight: 44,
+    paddingHorizontal: 18,
     borderRadius: radius.pill,
-    backgroundColor: colors.fill,
+    backgroundColor: colors.card,
     alignItems: "center",
     justifyContent: "center",
   },
+  choice: {
+    minHeight: 68,
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: radius.md,
+    backgroundColor: colors.card,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  radio: { width: 24, height: 24, borderRadius: 12, borderWidth: 2, alignItems: "center", justifyContent: "center" },
+  radioDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: colors.white },
+  day: {
+    flex: 1,
+    height: 104,
+    borderRadius: 26,
+    backgroundColor: colors.card,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+  },
   chipSelected: { backgroundColor: colors.ink },
-  dots: { flexDirection: "row", alignItems: "center", gap: 6 },
-  dot: { height: 8, borderRadius: 4 },
   severity: { flexDirection: "row", gap: 4 },
   segment: { flex: 1, height: 8, borderRadius: 4 },
-  pill: { alignSelf: "flex-start", paddingHorizontal: 10, paddingVertical: 4, borderRadius: radius.pill },
 });

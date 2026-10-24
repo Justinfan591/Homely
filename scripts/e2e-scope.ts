@@ -227,7 +227,7 @@ async function main() {
 
       // Questions.
       await rejects(api.homeowner.finish(id, {}), 400, "missing answers");
-      await rejects(api.homeowner.finish(id, { ...answersFor(s.template), smell: "Maybe" }), 400, "answer that isn't an option");
+      await rejects(api.homeowner.finish(id, { ...answersFor(s.template), smell: "x".repeat(201) }), 400, "own-words answer over 200 characters");
       s = await api.homeowner.finish(id, answersFor(s.template), "Behind the bathroom door.");
       if (s.scan.status !== "spec_ready") {
         aiCheck(false, `spec confidence ${s.spec?.confidence} — expected ≥ ${HANDOFF_CONFIDENCE}; rest of flow skipped`);
@@ -243,6 +243,8 @@ async function main() {
 
       // Matching + deterministic pricing.
       const names = s.matches.map((m) => m.name);
+      // Kept for the pro-side check: the list is cleared once offers are requested.
+      const quoted = s.matches;
       check(names.includes("Mold Busters") && names.includes("ClearSpore Remediation"), `in-range mold pros match (${names.join(", ")})`);
       check(!names.includes("Northshore Mold Co"), "out-of-range pro is filtered out");
       check(!names.some((n) => n.includes("Plumbing") || n.includes("Pipeline")), "other trades are filtered out");
@@ -294,7 +296,7 @@ async function main() {
       check(d.answers.length === s.template.questions.filter((x) => !x.optional).length, "pro sees readable answers");
       check(d.home.address !== "1 Test Street", "address hidden until the homeowner picks");
       aiCheck(d.priceReason === "Test suggestion.", "pro sees the pricing agent's reason");
-      check(d.quote.price === s.matches.find((m) => m.name === "Mold Busters")?.quote.price, "pro's suggested price = the homeowner-side quote");
+      check(d.quote.price === quoted.find((m) => m.name === "Mold Busters")?.quote.price, "pro's suggested price = the homeowner-side quote");
       check((await pro("Mold Busters").queue()).tabs.new.find((c) => c.jobId === jobId)?.priceReason === d.priceReason, "queue card carries the same reason");
       check((await raw(d.photos[0].src)).status === 200, "pro's signed photo src loads");
       await rejects(pro("Mold Busters").accept(jobId, { slot: d.slots[0].startsAt, price: d.quote.price }), 409, "can't take an open request directly");

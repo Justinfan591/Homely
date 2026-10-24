@@ -1,0 +1,36 @@
+{
+  "trade": "electrical",
+  "label": "Electrical",
+  "description": "Dead outlets, switches, flickering lights or a tripping breaker.",
+  "icon": "zap",
+  "area_label": "Area involved",
+  "required_shots": [
+    { "id": "fixture_closeup", "prompt": "Show the outlet, switch or light", "tip": "Fill the frame. Don't touch anything that's sparking or hot.", "hint": "The outlet, switch, fixture or appliance cord with the problem, close enough to see the plate and any marks." },
+    { "id": "room_wide", "prompt": "Step back and show where it is", "tip": "Include the wall or ceiling around it.", "hint": "A wider view of the room showing where the fixture is." },
+    { "id": "panel", "prompt": "Show your breaker panel", "tip": "Open the door so the switches are in view.", "hint": "The electrical panel with breakers visible.", "optional": true, "skip_label": "I can't get to it" }
+  ],
+  "questions": [
+    { "id": "symptom", "q": "What's happening?", "options": ["No power", "Flickering", "Breaker keeps tripping", "Sparks or burning smell"] },
+    { "id": "scope", "q": "How much is affected?", "options": ["One outlet or light", "One room", "Several rooms"] },
+    { "id": "since", "q": "When did it start?", "options": ["Today", "This week", "Longer"], "optional": true }
+  ],
+  "notes": { "enabled": true, "prompt": "Anything else? (optional)" },
+  "outputs": ["affected_area_m2", "severity", "issue_location", "recommended_service"],
+  "output_labels": { "issue_location": "Where", "recommended_service": "Recommended service" },
+  "severity_guide": [
+    "one cosmetic issue, e.g. a loose or cracked cover plate, everything works",
+    "one outlet, switch or light not working, no heat or marks",
+    "several fixtures out, or flickering in one room",
+    "a breaker that keeps tripping, or a whole room or circuit out",
+    "sparks, burning smell, scorch marks, heat or buzzing: a safety risk"
+  ],
+  "policy": {
+    "finding_wording": "Electrical issue visible, on-site inspection by a licensed electrician recommended.",
+    "rules": [
+      "Describe what is visible; say 'likely' for any cause.",
+      "Never tell the homeowner to open, repair or test wiring themselves.",
+      "affected_area_m2 is usually 0 for electrical jobs unless a surface is visibly damaged."
+    ]
+  },
+  "virtual_call_label": "Book a virtual electrical assessment"
+}

@@ -1,6 +1,12 @@
 import type { TradeId, TradeTemplate } from "@/domain/types";
 // One source of truth: the same /templates files the server validates and prompts with.
+import appliances from "../../../templates/appliances.json";
+import electrical from "../../../templates/electrical.json";
+import garden from "../../../templates/garden.json";
+import handyman from "../../../templates/handyman.json";
+import locksmith from "../../../templates/locksmith.json";
 import mold from "../../../templates/mold.json";
+import painting from "../../../templates/painting.json";
 import plumbingSink from "../../../templates/plumbing_sink.json";
 
 type RawTemplate = {
@@ -38,7 +44,8 @@ function load(raw: RawTemplate): TradeTemplate {
 }
 
 // Adding a trade = adding a JSON file to /templates and listing it here.
-export const templates: TradeTemplate[] = [mold, plumbingSink].map(load);
+// Listed in the order of the design's "What's closest?" grid.
+export const templates: TradeTemplate[] = [plumbingSink, mold, electrical, handyman, locksmith, painting, garden, appliances].map(load);
 
 export function getTemplate(trade: TradeId): TradeTemplate {
   const t = templates.find((x) => x.trade === trade);

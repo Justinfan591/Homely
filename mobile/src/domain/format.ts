@@ -49,3 +49,34 @@ export function timeAgo(iso: string, now = Date.now()) {
 }
 
 export const SEVERITY_LABELS = ["Minor", "Mild", "Moderate", "Significant", "Severe"];
+
+/** The booking windows on "When works for you?". Hours are local, end exclusive. */
+export const WINDOWS = [
+  { label: "Morning", range: "8 – 12", start: 8, end: 12 },
+  { label: "Afternoon", range: "12 – 4", start: 12, end: 16 },
+  { label: "Evening", range: "4 – 8", start: 16, end: 20 },
+] as const;
+
+export function partOfDay(d: Date) {
+  const h = d.getHours();
+  return h < 12 ? "morning" : h < 16 ? "afternoon" : "evening";
+}
+
+/** "Today, morning" / "Tomorrow, evening" / "Mon, Oct 26, afternoon" */
+export function windowLabel(iso: string, now = new Date()) {
+  const d = new Date(iso);
+  return `${dayLabel(d, now)}, ${partOfDay(d)}`;
+}
+
+/** "8 – 12" for the window a time falls in. */
+export function windowRange(iso: string) {
+  const h = new Date(iso).getHours();
+  return (WINDOWS.find((w) => h >= w.start && h < w.end) ?? WINDOWS[h < 8 ? 0 : 2]).range;
+}
+
+/** "Tomorrow" / "Wed" for the right side of a quote. */
+export function shortDay(iso: string, now = new Date()) {
+  const d = new Date(iso);
+  const label = dayLabel(d, now);
+  return label === "Today" || label === "Tomorrow" ? label : DAYS[d.getDay()];
+}

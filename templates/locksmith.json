@@ -1,0 +1,31 @@
+{
+  "trade": "locksmith",
+  "label": "Locksmith",
+  "description": "Locked out, broken or sticking locks, new keys or a lock change.",
+  "icon": "key",
+  "area_label": "Area involved",
+  "required_shots": [
+    { "id": "lock_closeup", "prompt": "Show the lock up close", "tip": "Include the keyhole and handle.", "hint": "The lock or deadbolt, close enough to see its type and condition." },
+    { "id": "door_wide", "prompt": "Show the whole door", "tip": "From the outside if you can.", "hint": "The full door and frame the lock is on." },
+    { "id": "door_edge", "prompt": "Show the edge of the door", "tip": "Where the bolt comes out, if the door is open.", "hint": "The door's edge with the latch and bolt.", "optional": true, "skip_label": "The door is closed" }
+  ],
+  "questions": [
+    { "id": "situation", "q": "What do you need?", "options": ["I'm locked out", "Lock is broken or stuck", "Change or rekey the lock", "New keys"] },
+    { "id": "door", "q": "Which door?", "options": ["Front door", "Back or side door", "Inside door", "Garage or gate"] }
+  ],
+  "notes": { "enabled": true, "prompt": "Anything else? (optional)" },
+  "outputs": ["affected_area_m2", "severity", "lock_type", "recommended_service"],
+  "output_labels": { "lock_type": "Lock type", "recommended_service": "Recommended service" },
+  "severity_guide": [
+    "a spare key or a minor adjustment, nothing urgent",
+    "a sticky lock that still works",
+    "a lock change or rekey, or a lock that barely works",
+    "a broken lock on an outside door, or the home can't be secured",
+    "locked out right now, or a forced or damaged door"
+  ],
+  "policy": {
+    "finding_wording": "Lock issue as shown, on-site locksmith visit recommended.",
+    "rules": ["Describe what is visible.", "affected_area_m2 is 0 for locksmith jobs."]
+  },
+  "virtual_call_label": "Book a virtual locksmith call"
+}

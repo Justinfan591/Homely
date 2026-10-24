@@ -22,7 +22,9 @@ import { distanceKm, etaMinutes, slotsFor, virtualPartner } from "./matching";
 import { bestPhotos, isBroadcast, jobInfo, moveJob, offerInfo, parseSlot, photoInfo, scanInfo, scanPhotoRows, specInfo } from "./service";
 import { getTemplate } from "./templates";
 
-const { providers, scopeJobs, jobSpecs, scans, homes, offers } = schema;
+const { providers, scopeJobs, jobSpecs, scans, homes, offers, ratings } = schema;
+
+const ratingOf = (jobId: number) => db.select().from(ratings).where(eq(ratings.jobId, jobId)).get()?.stars ?? null;
 
 /** The /pro dashboard has no auth: the provider comes from ?provider=<id>. */
 export function providerFromRequest(req: Request): Provider {
@@ -116,6 +118,12 @@ export function queue(p: Provider): Record<ProTab, ProQueueCard[]> {
       distanceKm: Math.round(distanceKm(r.homes, p) * 10) / 10,
       myOffer: myOffer(p, r.scope_jobs.id, r.homes),
       invitedCount: r.scope_jobs.invited.length,
+      description: r.scans.description ?? null,
+      slot: r.scope_jobs.slot?.toISOString() ?? null,
+      mode: r.scope_jobs.mode,
+      // Same rule as the job detail: the exact address only once the job is this pro's.
+      address: r.scope_jobs.providerId === p.id ? r.homes.address : null,
+      rating: ratingOf(r.scope_jobs.id),
       createdAt: r.scope_jobs.createdAt.toISOString(),
       updatedAt: r.scope_jobs.updatedAt.toISOString(),
     });

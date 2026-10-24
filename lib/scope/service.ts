@@ -4,8 +4,10 @@ import { db, schema } from "@/db";
 import type { Home, JobSpec, Offer, Provider, Scan, ScanPhoto, ScopeJob, User } from "@/db/schema";
 import { HttpError } from "@/lib/auth";
 import {
+  FREE_ANSWER_MAX,
   HANDOFF_CONFIDENCE,
   type HomeInfo,
+  type PhotoMark,
   type HomeRecordItem,
   type JobSpecInfo,
   type MoreInfoRequest,
@@ -33,22 +35,28 @@ export function homeOf(user: User): Home | undefined {
 }
 
 export function homeInfo(h: Home): HomeInfo {
-  return { id: h.id, label: h.label, address: h.address, lat: h.lat, lng: h.lng };
+  return { id: h.id, label: h.label, address: h.address, lat: h.lat, lng: h.lng, homeType: h.homeType ?? null };
 }
 
-export function saveHome(user: User, data: { label?: string; address: string; lat: number; lng: number }) {
+export function saveHome(user: User, data: { label?: string; address: string; lat: number; lng: number; homeType?: string | null }) {
   const existing = homeOf(user);
   if (existing) {
     return db
       .update(homes)
-      .set({ address: data.address, lat: data.lat, lng: data.lng, ...(data.label ? { label: data.label } : {}) })
+      .set({
+        address: data.address,
+        lat: data.lat,
+        lng: data.lng,
+        ...(data.label ? { label: data.label } : {}),
+        ...(data.homeType !== undefined ? { homeType: data.homeType } : {}),
+      })
       .where(eq(homes.id, existing.id))
       .returning()
       .get();
   }
   return db
     .insert(homes)
-    .values({ customerId: user.id, address: data.address, lat: data.lat, lng: data.lng, label: data.label ?? "My home" })
+    .values({ customerId: user.id, address: data.address, lat: data.lat, lng: data.lng, label: data.label ?? "My home", homeType: data.homeType ?? null })
     .returning()
     .get();
 }
@@ -179,6 +187,8 @@ export function scanInfo(scan: Scan): ScanResponse["scan"] {
     answers: scan.answers,
     notes: scan.notes,
     skippedShots: scan.skippedShots,
+    description: scan.description ?? null,
+    mark: scan.mark ?? null,
     focus: scan.focus ?? null,
     createdAt: scan.createdAt.toISOString(),
   };
@@ -224,11 +234,12 @@ export function homeRecord(home: Home): HomeRecordItem[] {
     const asker = job?.status === "more_info" ? job.request?.providerId : null;
     const provider = provs.find((p) => p.id === (job?.providerId ?? asker));
     const open = job?.status === "open" ? activeOffers(job.id, home) : [];
+    const rating = job ? db.select().from(ratings).where(eq(ratings.jobId, job.id)).get() : undefined;
     const needsAction =
       ["capturing", "clarifying", "spec_ready"].includes(s.status) ||
       (!!job && ["more_info", "declined"].includes(job.status)) ||
       open.length > 0 ||
-      (job?.status === "done" && !db.select().from(ratings).where(eq(ratings.jobId, job.id)).get());
+      (job?.status === "done" && !rating);
     const updated = job && job.updatedAt > s.updatedAt ? job.updatedAt : s.updatedAt;
     return {
       scanId: s.id,
@@ -241,6 +252,9 @@ export function homeRecord(home: Home): HomeRecordItem[] {
       priceLow: spec?.priceLow ?? null,
       priceHigh: spec?.priceHigh ?? null,
       price: job?.price ?? null,
+      slot: (job?.slot ?? job?.requestedSlot)?.toISOString() ?? null,
+      slotConfirmed: !!job?.slot,
+      rating: rating?.stars ?? null,
       request: job?.status === "more_info" ? (job.request ?? null) : null,
       offerCount: open.length,
       bestOffer: open[0] ? { price: open[0].price, providerName: open[0].provider.name } : null,
@@ -267,9 +281,18 @@ function getTemplateSafe(trade: string) {
 const touch = (scanId: number, set: Partial<Scan> = {}) =>
   db.update(scans).set({ ...set, updatedAt: new Date() }).where(eq(scans.id, scanId)).returning().get();
 
-export function startScan(home: Home, trade: string) {
+/** `description` is what the homeowner said on the voice screen, if they started there. */
+export function startScan(home: Home, trade: string, description?: string | null) {
   getTemplate(trade);
-  return db.insert(scans).values({ homeId: home.id, trade }).returning().get();
+  return db.insert(scans).values({ homeId: home.id, trade, description: description?.trim() || null }).returning().get();
+}
+
+/** The homeowner's dot on one of their photos ("this is where it leaks"). */
+export function setMark(scan: Scan, mark: PhotoMark) {
+  const template = getTemplate(scan.trade);
+  if (!template.required_shots.some((s) => s.id === mark.shotId)) throw new HttpError(400, "Unknown shot.");
+  if (!scanPhotoRows(scan.id).some((p) => p.shotId === mark.shotId && p.ok)) throw new HttpError(400, "Take that photo first.");
+  touch(scan.id, { mark });
 }
 
 function requireCapturing(scan: Scan, template: Template, shotId: string) {
@@ -345,8 +368,10 @@ export async function finishScan(scan: Scan, home: Home, input: { answers: Recor
       if (!q.optional) throw new HttpError(400, `Please answer: ${q.q}`);
       continue;
     }
-    if (!q.options.includes(a)) throw new HttpError(400, `"${a}" isn't an option for: ${q.q}`);
-    answers[q.id] = a;
+    // One of the options, or the homeowner's own words ("Something else? Write it").
+    const answer = a.trim();
+    if (!answer || answer.length > FREE_ANSWER_MAX) throw new HttpError(400, `Please answer in a few words: ${q.q}`);
+    answers[q.id] = answer;
   }
   const note = input.notes?.trim() || null;
   const notes = scan.focus && note ? [scan.notes, `Reply to the pro: ${note}`].filter(Boolean).join("\n") : note ?? scan.notes;
@@ -365,6 +390,8 @@ export async function finishScan(scan: Scan, home: Home, input: { answers: Recor
       skippedShots: scan.skippedShots,
       answers,
       notes,
+      description: scan.description ?? null,
+      mark: scan.mark ?? null,
       proRequest: job?.request?.message ?? null,
     });
 
@@ -530,12 +557,12 @@ export function reopenForMore(scan: Scan) {
   touch(scan.id, { status: shotIds.length ? "capturing" : "clarifying", focus: { ...job.request, shotIds }, focusDone: [] });
 }
 
-export function rate(scan: Scan, stars: number) {
+export function rate(scan: Scan, stars: number, review: { tags?: string[]; note?: string | null } = {}) {
   const job = jobOfScan(scan.id);
   if (!job || job.status !== "done") throw new HttpError(409, "You can rate the job once it's done.");
   if (db.select().from(ratings).where(eq(ratings.jobId, job.id)).get()) throw new HttpError(409, "You've already rated this job.");
   db.transaction((tx) => {
-    tx.insert(ratings).values({ jobId: job.id, stars }).run();
+    tx.insert(ratings).values({ jobId: job.id, stars, tags: review.tags ?? [], note: review.note?.trim() || null }).run();
     if (job.providerId) {
       const p = tx.select().from(providers).where(eq(providers.id, job.providerId)).get() as Provider;
       const count = p.ratingCount + 1;
@@ -551,7 +578,7 @@ export function rate(scan: Scan, stars: number) {
 export function cancel(scan: Scan) {
   const job = jobOfScan(scan.id);
   if (job) {
-    moveJob(job, ["open", "pending", "handoff", "virtual_call", "more_info", "declined"], { status: "cancelled" });
+    moveJob(job, ["open", "pending", "accepted", "handoff", "virtual_call", "more_info", "declined"], { status: "cancelled" });
     closeOffers(job.id);
   }
   else if (scan.status === "cancelled") return;

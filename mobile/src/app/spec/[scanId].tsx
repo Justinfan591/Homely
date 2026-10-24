@@ -26,7 +26,7 @@ export default function SpecScreen() {
   const needsAnswers = error instanceof ApiError && error.code === "needs_answers";
 
   useEffect(() => {
-    if (needsAnswers) router.replace(`/clarify/${scanId}`);
+    if (needsAnswers) router.replace(`/questions/${scanId}`);
   }, [needsAnswers, scanId]);
 
   if (needsAnswers) return <Analyzing />;
@@ -139,7 +139,7 @@ function Photos({ scan }: { scan?: Scan }) {
 /** Already with a pro (e.g. after answering an "ask for more"): go to tracking. */
 function Submitted({ jobId }: { jobId: string }) {
   useEffect(() => {
-    router.replace(`/track/${jobId}`);
+    router.replace(`/booking/${jobId}`);
   }, [jobId]);
   return <Analyzing />;
 }
@@ -170,7 +170,7 @@ function Match({ spec, options, scan, onHuman }: { spec: JobSpec; options: Match
     setError(null);
     try {
       const job = await api.requestOffers(spec.scanId, slotId ?? undefined);
-      router.replace(`/track/${job.id}`);
+      router.replace(`/finding/${job.id}`);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Couldn't send your request. Try again.");
       setSending(false);
@@ -279,7 +279,7 @@ function NoProvider({ spec, scanId }: { spec: JobSpec; scanId: string }) {
     setError(null);
     try {
       const job = await api.bookVirtualCall(scanId, slotId);
-      router.replace(`/track/${job.id}`);
+      router.replace(`/booking/${job.id}`);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Couldn't book. Try again.");
       setBooking(false);
@@ -340,7 +340,7 @@ const styles = StyleSheet.create({
   between: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 },
   rule: { height: StyleSheet.hairlineWidth, backgroundColor: colors.line },
   fact: { flexDirection: "row", justifyContent: "space-between", gap: 24 },
-  estimate: { marginTop: 32, padding: 20, borderRadius: radius.md, backgroundColor: colors.fill },
+  estimate: { marginTop: 32, padding: 20, borderRadius: radius.lg, backgroundColor: colors.card },
   provider: { flexDirection: "row", alignItems: "center", gap: 14, marginTop: 12, paddingVertical: 8 },
   avatar: {
     width: 48,

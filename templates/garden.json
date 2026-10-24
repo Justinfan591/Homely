@@ -1,0 +1,31 @@
+{
+  "trade": "garden",
+  "label": "Garden",
+  "description": "Lawn, hedges, trees, weeds and yard clean-up.",
+  "icon": "leaf",
+  "area_label": "Garden area",
+  "required_shots": [
+    { "id": "yard_wide", "prompt": "Show the whole area", "tip": "Stand back so the edges are in frame.", "hint": "A wide view of the yard or garden area that needs work." },
+    { "id": "problem_closeup", "prompt": "Get close to the main problem", "tip": "An overgrown hedge, a dead patch, a fallen branch.", "hint": "A close-up of the main problem area." },
+    { "id": "access", "prompt": "Show how a pro gets in", "tip": "Gate, side path or driveway.", "hint": "The access path to the area, and any gate.", "optional": true, "skip_label": "Easy access from the street" }
+  ],
+  "questions": [
+    { "id": "job", "q": "What needs doing?", "options": ["Mowing or lawn care", "Hedges or trees", "Weeding or clean-up", "Something else"] },
+    { "id": "how_often", "q": "Is it one time or regular?", "options": ["One time", "Every week or two", "Not sure"] }
+  ],
+  "notes": { "enabled": true, "prompt": "Anything else? (optional)" },
+  "outputs": ["affected_area_m2", "severity", "work", "recommended_service"],
+  "output_labels": { "work": "Work", "recommended_service": "Recommended service" },
+  "severity_guide": [
+    "light upkeep on a small area",
+    "a regular job on a normal yard",
+    "overgrown, or a larger yard",
+    "heavy clean-up, big hedges or tree work",
+    "a fallen tree or branch, or something blocking or damaging the home"
+  ],
+  "policy": {
+    "finding_wording": "Garden work as shown, on-site visit recommended.",
+    "rules": ["Describe what is visible.", "affected_area_m2 is the garden area to work on."]
+  },
+  "virtual_call_label": "Book a virtual garden quote"
+}

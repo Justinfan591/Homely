@@ -214,7 +214,33 @@ export type ScopeJobInfo = {
   updatedAt: string;
 };
 
-export type HomeInfo = { id: number; label: string; address: string; lat: number; lng: number };
+export type HomeInfo = { id: number; label: string; address: string; lat: number; lng: number; homeType: string | null };
+
+/** Where the homeowner marked the problem on a photo: x and y in % of the photo's width and height. */
+export type PhotoMark = { shotId: string; x: number; y: number };
+
+export const HOME_TYPES = ["Apartment", "House", "Condo", "Townhouse", "Other"] as const;
+
+/** GET/PUT /api/profile: the homeowner's own details and home. */
+export type ProfileInfo = {
+  name: string;
+  email: string | null;
+  phone: string | null;
+  age: number | null;
+  address: string | null;
+  homeType: string | null;
+};
+
+/** POST /api/auth/code/verify. `isNew`: the account was just created, so the app asks for a name and home. */
+export type CodeLoginResponse = { token: string; isNew: boolean };
+
+/** POST /api/intake/classify: which trade the homeowner's description (and photo) is about. */
+export type ClassifyResult = { trade: string; label: string; summary: string };
+
+/** Answers to template questions are one of the options, or the homeowner's own words (up to this long). */
+export const FREE_ANSWER_MAX = 200;
+
+export const REVIEW_TAGS = ["On time", "Tidy", "Fair price", "Clear communication"] as const;
 
 export type ScanResponse = {
   scan: {
@@ -224,6 +250,9 @@ export type ScanResponse = {
     answers: Record<string, string>;
     notes: string | null;
     skippedShots: string[];
+    /** What the homeowner said on the voice screen. */
+    description: string | null;
+    mark: PhotoMark | null;
     /** Set while the homeowner is answering a pro's "ask for more". */
     focus: MoreInfoRequest | null;
     createdAt: string;
@@ -257,6 +286,11 @@ export type HomeRecordItem = {
   priceLow: number | null;
   priceHigh: number | null;
   price: number | null;
+  /** The booked time (or the time the homeowner asked for, until the pro confirms). */
+  slot: string | null;
+  slotConfirmed: boolean;
+  /** Stars the homeowner gave, once rated. */
+  rating: number | null;
   /** The pro's "ask for more", while the job is more_info. */
   request: MoreInfoRequest | null;
   /** Active offers while the job is open. */
@@ -292,6 +326,15 @@ export type ProQueueCard = {
   /** This pro's offer on an open job (any status). */
   myOffer: OfferInfo | null;
   invitedCount: number;
+  /** What the homeowner said on the app's voice screen. */
+  description: string | null;
+  /** Confirmed visit or call time, once accepted. */
+  slot: string | null;
+  mode: "onsite" | "virtual";
+  /** Only for this pro's own jobs. */
+  address: string | null;
+  /** The homeowner's stars, once rated. */
+  rating: number | null;
   createdAt: string;
   updatedAt: string;
 };

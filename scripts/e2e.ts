@@ -135,7 +135,7 @@ async function main() {
     assert.deepEqual([job.status, job.slot?.start, job.offers?.length, job.invitedCount], ["collecting", requested.start, 0, outcome.options.length]);
     ok(`sent to ${job.invitedCount} pros; preferred ${requested.label}`);
     let rec = (await app.listRecord(home.id)).find((r) => r.id === scan.id)!;
-    assert.deepEqual([rec.status, rec.href], ["awaiting", `/track/${scan.id}`]);
+    assert.deepEqual([rec.status, rec.href], ["awaiting", `/finding/${scan.id}`]);
     assert.equal((await fetch(rec.photoUri!)).status, 200);
     ok("Home Record: waiting for offers, with a thumbnail");
     const jobId = db.select().from(schema.scopeJobs).where(eq(schema.scopeJobs.scanId, Number(scan.id))).get()!.id;
@@ -207,7 +207,7 @@ async function main() {
     ok(`on the way, arriving in ${job.etaMinutes} min`);
     html = await proPage(mb.id, `&tab=active&job=${jobId}`);
     await submit(mb.id, html, 'name="to"', { job: String(jobId), tab: "active", to: "done" });
-    job = await app.rateJob(job.id, 5);
+    job = await app.rateJob(job.id, { stars: 5, tags: ["On time"], note: "Great work" });
     assert.deepEqual([job.status, job.rating], ["done", 5]);
     assert.ok(await inTab(mb.id, "done", jobId));
     assert.equal((await app.listRecord(home.id)).find((r) => r.id === scan.id)?.status, "done");

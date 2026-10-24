@@ -1,4 +1,4 @@
-import { router, useLocalSearchParams } from "expo-router";
+import { Redirect, router, useLocalSearchParams } from "expo-router";
 import { useEffect, useState } from "react";
 import { StyleSheet, View } from "react-native";
 import Animated, { FadeIn, FadeInDown, useAnimatedStyle, useSharedValue, withRepeat, withTiming } from "react-native-reanimated";
@@ -95,6 +95,9 @@ function Collecting({ job, onChange }: { job: Job; onChange: () => void }) {
       onChange();
     }
   }
+
+  // Offers coming in have their own screens; this one only covers "every pro passed".
+  if (!nobodyLeft) return <Redirect href={offers.length ? `/quotes/${job.id}` : `/finding/${job.id}`} />;
 
   if (nobodyLeft) {
     return (
@@ -287,7 +290,7 @@ function Progress({ job, onRated }: { job: Job; onRated: () => void }) {
     setSaving(true);
     setRateError(null);
     try {
-      await api.rateJob(job.id, stars);
+      await api.rateJob(job.id, { stars, tags: [], note: "" });
       onRated();
     } catch (e) {
       setRateError(e instanceof Error ? e.message : "Couldn't save your rating.");
@@ -466,7 +469,7 @@ const styles = StyleSheet.create({
   stepper: { flexDirection: "row", gap: 6, marginTop: 8 },
   track: { height: 4, borderRadius: 2, backgroundColor: colors.line, overflow: "hidden" },
   fill: { height: 4, backgroundColor: colors.ink },
-  card: { marginTop: 40, padding: 20, borderRadius: radius.md, backgroundColor: colors.fill, gap: 14 },
+  card: { marginTop: 40, padding: 20, borderRadius: radius.lg, backgroundColor: colors.card, gap: 14 },
   providerRow: { flexDirection: "row", alignItems: "center", gap: 14 },
   avatar: {
     width: 48,
@@ -478,7 +481,7 @@ const styles = StyleSheet.create({
   },
   rule: { height: StyleSheet.hairlineWidth, backgroundColor: colors.line },
   row: { flexDirection: "row", justifyContent: "space-between", gap: 16 },
-  offer: { padding: 18, borderRadius: radius.md, backgroundColor: colors.fill, gap: 14 },
+  offer: { padding: 18, borderRadius: radius.lg, backgroundColor: colors.card, gap: 14 },
   pulse: { width: 52, height: 52, borderRadius: 26, backgroundColor: colors.ink, alignItems: "center", justifyContent: "center" },
   reviewBadge: { width: 56, height: 56, borderRadius: 28, backgroundColor: colors.accentSoft, alignItems: "center", justifyContent: "center" },
 });

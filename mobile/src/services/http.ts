@@ -3,14 +3,23 @@
 import { createScopeClient, ScopeApiError, type PhotoInput } from "../../../shared/scope-client";
 import type { HomeRecordItem, OfferInfo, ProviderMatch, ScanResponse, ScopeJobStatus, Slot as ApiSlot } from "../../../shared/scope";
 import { slotLabel } from "../domain/format";
-import type { Job, JobSpec, JobStatus, MatchOption, Offer, RecordItem, RecordStatus, Scan, Slot, SpecOutcome } from "../domain/types";
+import type { Job, JobSpec, JobStatus, MatchOption, Offer, Profile, RecordItem, RecordStatus, Scan, Slot, SpecOutcome } from "../domain/types";
 import { ApiError, type ScopeApi } from "./api";
+
+/** Where the app keeps its session token (SecureStore on the phone). */
+export type TokenStore = { get(): Promise<string | null>; set(token: string | null): Promise<void> };
 
 export type HttpApiOptions = {
   baseUrl: string;
   /** Turns a local image uri into an upload part (resized JPEG on the phone, a Blob in tests). */
   preparePhoto: (uri: string) => Promise<PhotoInput>;
-  /** The live demo has no sign-in screen: the app signs in as the demo homeowner. */
+  /** Turns a local recording uri into an upload part. */
+  prepareAudio?: (uri: string) => Promise<PhotoInput>;
+  /**
+   * The app signs in with a code and keeps the token here. Without a store (scripts/e2e.ts),
+   * the client signs in as `account`, the demo homeowner by default.
+   */
+  session?: TokenStore;
   account?: { email: string; password: string };
   fetch?: typeof fetch;
 };
@@ -21,8 +30,31 @@ export function createHttpApi(opts: HttpApiOptions): ScopeApi {
   const base = opts.baseUrl.replace(/\/+$/, "");
   const account = opts.account ?? DEMO_HOMEOWNER;
   let token: string | null = null;
+  let restored = false;
+  const listeners = new Set<(signedIn: boolean) => void>();
   const client = createScopeClient({ baseUrl: base, getToken: () => token, fetch: opts.fetch });
   const h = client.homeowner;
+
+  async function setToken(next: string | null) {
+    const changed = !!next !== !!token;
+    token = next;
+    await opts.session?.set(next).catch((err) => console.warn("Couldn't save the session", err));
+    if (changed) for (const fn of listeners) fn(!!next);
+  }
+
+  /** The app's code sign-in (a saved token), or the demo password sign-in for scripts. */
+  async function ensureToken() {
+    if (token) return;
+    if (opts.session) {
+      if (!restored) {
+        restored = true;
+        token = await opts.session.get().catch(() => null);
+      }
+      if (!token) throw new ApiError("Please sign in.", "signed_out");
+    } else {
+      token = (await client.auth.login(account.email, account.password)).token;
+    }
+  }
   // Answers wait here until the spec screen generates the estimate (keeps the "analyzing" step there).
   const pending = new Map<string, { answers: Record<string, string>; note: string }>();
   const specScan = new Map<string, string>();
@@ -31,10 +63,14 @@ export function createHttpApi(opts: HttpApiOptions): ScopeApi {
   async function run<T>(fn: () => Promise<T>): Promise<T> {
     for (let attempt = 0; ; attempt++) {
       try {
-        if (!token) token = (await client.auth.login(account.email, account.password)).token;
+        await ensureToken();
         return await fn();
       } catch (err) {
         if (err instanceof ScopeApiError) {
+          if (err.status === 401 && opts.session) {
+            await setToken(null);
+            throw new ApiError("Please sign in again.", "signed_out");
+          }
           if (err.status === 401 && attempt === 0) {
             token = null;
             continue;
@@ -70,6 +106,8 @@ export function createHttpApi(opts: HttpApiOptions): ScopeApi {
       pendingShotIds: r.remainingShots,
       answers: r.scan.answers,
       note: r.scan.notes ?? "",
+      description: r.scan.description,
+      mark: r.scan.mark,
       createdAt: r.scan.createdAt,
       followUp: focus ? { provider: r.job?.provider?.name ?? "Your pro", message: focus.message ?? "", questionIds: focus.questionIds } : undefined,
     };
@@ -133,6 +171,10 @@ export function createHttpApi(opts: HttpApiOptions): ScopeApi {
       specId: String(r.spec?.id ?? ""),
       scanId: String(r.scan.id),
       homeId: String(r.home.id),
+      trade: r.scan.trade,
+      title: r.spec?.title ?? r.template.label,
+      address: r.home.address,
+      providerPhone: j.provider?.phone ?? null,
       providerName: j.provider?.name ?? (virtual ? "Our virtual team" : j.status === "open" ? "Pros nearby" : j.status === "more_info" ? "A pro" : "A Scope specialist"),
       providerRating: j.provider?.rating ?? null,
       status: JOB_STATUS[j.status],
@@ -161,29 +203,78 @@ export function createHttpApi(opts: HttpApiOptions): ScopeApi {
     return r.matches.length ? { kind: "match", spec, options: r.matches.map(toOption) } : { kind: "no_provider", spec };
   }
 
+  /** Status for the Home Record, and the screen that picks up from there. */
   function recordStatus(i: HomeRecordItem): { status: RecordStatus; href: string } {
     const id = i.scanId;
     switch (i.jobStatus) {
       case null:
-        if (i.scanStatus === "cancelled") return { status: "cancelled", href: `/scan/${id}` };
-        return { status: "in_progress", href: i.scanStatus === "clarifying" ? `/clarify/${id}` : i.scanStatus === "spec_ready" ? `/spec/${id}` : `/scan/${id}` };
+        if (i.scanStatus === "cancelled") return { status: "cancelled", href: `/booking/${id}` };
+        return { status: "in_progress", href: i.scanStatus === "clarifying" ? `/questions/${id}` : i.scanStatus === "spec_ready" ? `/book/${id}` : `/scan/${id}` };
       case "more_info":
         return { status: "needs_info", href: `/scan/${id}` };
       case "open":
-        return { status: i.offerCount ? "offers" : "awaiting", href: `/track/${id}` };
+        return { status: i.offerCount ? "offers" : "awaiting", href: i.offerCount ? `/quotes/${id}` : `/finding/${id}` };
       case "pending":
       case "virtual_call":
-        return { status: "awaiting", href: `/track/${id}` };
+        return { status: "awaiting", href: `/booking/${id}` };
       case "accepted":
-        return { status: "scheduled", href: `/track/${id}` };
+        return { status: "scheduled", href: `/booking/${id}` };
       default:
-        return { status: i.jobStatus, href: `/track/${id}` };
+        return { status: i.jobStatus, href: `/booking/${id}` };
     }
   }
 
   const scan = (scanId: string) => h.scan(Number(scanId));
 
   return {
+    restoreSession: async () => {
+      if (!opts.session) return true;
+      try {
+        await ensureToken();
+        // Check the saved token still works (e.g. the server's secret changed).
+        await client.auth.me();
+        return true;
+      } catch (err) {
+        if (err instanceof ScopeApiError && err.status === 401) await setToken(null);
+        // Offline: keep the token and let screens show their retry state.
+        return !!token;
+      }
+    },
+
+    startSignIn: (contact) =>
+      client.auth.startCode(contact).catch((err) => {
+        throw toApiError(err);
+      }),
+
+    verifyCode: async (contact, code) => {
+      try {
+        const res = await client.auth.verifyCode(contact, code);
+        await setToken(res.token);
+        return { isNew: res.isNew };
+      } catch (err) {
+        throw toApiError(err);
+      }
+    },
+
+    signOut: () => setToken(null),
+
+    onSessionChange: (fn) => {
+      listeners.add(fn);
+      return () => void listeners.delete(fn);
+    },
+
+    getProfile: () => run(async (): Promise<Profile> => ({ ...(await h.profile()) })),
+
+    updateProfile: (data) => run(async (): Promise<Profile> => ({ ...(await h.updateProfile(data)) })),
+
+    transcribe: (audioUri) =>
+      run(async () => {
+        if (!opts.prepareAudio) throw new ApiError("Voice isn't available here.", "rejected");
+        return (await h.transcribe(await opts.prepareAudio(audioUri), "recording.m4a")).text;
+      }),
+
+    classify: (text, photoUri) => run(async () => h.classify(text, photoUri ? await opts.preparePhoto(photoUri) : null)),
+
     listHomes: () =>
       run(async () => {
         const { home } = await h.home();
@@ -198,6 +289,10 @@ export function createHttpApi(opts: HttpApiOptions): ScopeApi {
             id: String(i.scanId),
             trade: i.trade,
             title: i.title,
+            providerName: i.providerName,
+            slot: i.slot ? slot(i.slot) : null,
+            slotConfirmed: i.slotConfirmed,
+            rating: i.rating,
             createdAt: i.updatedAt,
             status,
             price: i.price != null ? { low: i.price, high: i.price } : i.priceLow != null && i.priceHigh != null ? { low: i.priceLow, high: i.priceHigh } : null,
@@ -210,9 +305,9 @@ export function createHttpApi(opts: HttpApiOptions): ScopeApi {
         }),
       ),
 
-    createScan: (_homeId, trade) =>
+    createScan: (_homeId, trade, description) =>
       run(async () => {
-        const { id } = await h.startScan(trade);
+        const { id } = await h.startScan(trade, description);
         return toScan(await h.scan(id));
       }),
 
@@ -235,6 +330,8 @@ export function createHttpApi(opts: HttpApiOptions): ScopeApi {
         await h.skipShot(Number(scanId), shotId);
         return toScan(await scan(scanId));
       }),
+
+    markPhoto: (scanId, shotId, x, y) => run(async () => toScan(await h.mark(Number(scanId), { shotId, x, y }))),
 
     submitAnswers: (scanId, answers, note) =>
       run(async () => {
@@ -263,7 +360,7 @@ export function createHttpApi(opts: HttpApiOptions): ScopeApi {
         return toSpec(await scan(scanId));
       }),
 
-    requestOffers: (scanId, slotId) => run(async () => toJob(await h.requestOffers(Number(scanId), slotId))),
+    requestOffers: (scanId, slotStart) => run(async () => toJob(await h.requestOffers(Number(scanId), slotStart))),
 
     acceptOffer: (jobId, offerId) => run(async () => toJob(await h.acceptOffer(Number(jobId), Number(offerId)))),
 
@@ -273,10 +370,22 @@ export function createHttpApi(opts: HttpApiOptions): ScopeApi {
 
     getJob: (jobId) => run(async () => toJob(await scan(jobId))),
 
-    rateJob: (jobId, stars) => run(async () => toJob(await h.rate(Number(jobId), Math.min(5, Math.max(1, Math.round(stars))) as 1 | 2 | 3 | 4 | 5))),
+    rateJob: (jobId, review) =>
+      run(async () => {
+        const stars = Math.min(5, Math.max(1, Math.round(review.stars))) as 1 | 2 | 3 | 4 | 5;
+        return toJob(await h.rate(Number(jobId), stars, { tags: review.tags, note: review.note.trim() || null }));
+      }),
 
     askForHuman: (scanId) => run(async () => toOutcome(await h.askForHuman(Number(scanId)))),
 
     cancelJob: (jobId) => run(async () => toJob(await h.cancel(Number(jobId)))),
   };
+}
+
+/** Sign-in calls run before there is a session, so they map errors themselves. */
+function toApiError(err: unknown): ApiError {
+  if (err instanceof ApiError) return err;
+  if (err instanceof ScopeApiError) return new ApiError(err.message, err.status === 404 ? "not_found" : err.status >= 500 ? "network" : "rejected");
+  console.warn("Scope sign-in request failed:", err);
+  return new ApiError("We couldn't reach Scope. Is the server running, and is your phone on the same Wi-Fi?");
 }

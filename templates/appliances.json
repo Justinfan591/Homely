@@ -1,0 +1,35 @@
+{
+  "trade": "appliances",
+  "label": "Appliances",
+  "description": "Fridge, washer, dryer, dishwasher or oven not working right.",
+  "icon": "box",
+  "area_label": "Area affected",
+  "required_shots": [
+    { "id": "appliance_front", "prompt": "Show the whole appliance", "tip": "From the front, door closed.", "hint": "The full appliance from the front." },
+    { "id": "problem_closeup", "prompt": "Show the problem", "tip": "An error code, a leak, a broken part.", "hint": "A close-up of the error display, leak, damage or broken part." },
+    { "id": "model_label", "prompt": "Show the model label", "tip": "Usually inside the door or on the back.", "hint": "The brand/model/serial sticker, readable.", "optional": true, "skip_label": "I can't find it" }
+  ],
+  "questions": [
+    { "id": "appliance", "q": "Which appliance?", "options": ["Fridge or freezer", "Washer or dryer", "Dishwasher", "Oven or stove"] },
+    { "id": "symptom", "q": "What's it doing?", "options": ["Won't turn on", "Not working right", "Leaking", "Strange noise"] },
+    { "id": "age", "q": "How old is it?", "options": ["< 5 years", "5-10 years", "10+ years", "Not sure"], "optional": true }
+  ],
+  "notes": { "enabled": true, "prompt": "Anything else? (optional)" },
+  "outputs": ["affected_area_m2", "severity", "appliance", "recommended_service"],
+  "output_labels": { "appliance": "Appliance", "recommended_service": "Recommended service" },
+  "severity_guide": [
+    "works, but a minor annoyance (a noise, a loose part)",
+    "works poorly",
+    "stopped working, no leak",
+    "leaking water, or food at risk (fridge or freezer out)",
+    "burning smell, smoke, gas smell or water spreading: a safety risk"
+  ],
+  "policy": {
+    "finding_wording": "Appliance issue as shown, on-site repair visit recommended.",
+    "rules": [
+      "Describe what is visible; say 'likely' for any cause.",
+      "affected_area_m2 is 0 unless water has damaged the floor or cabinets."
+    ]
+  },
+  "virtual_call_label": "Book a virtual appliance check"
+}
