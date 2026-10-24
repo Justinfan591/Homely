@@ -1,0 +1,47 @@
+import type { TradeId, TradeTemplate } from "@/domain/types";
+// One source of truth: the same /templates files the server validates and prompts with.
+import mold from "../../../templates/mold.json";
+import plumbingSink from "../../../templates/plumbing_sink.json";
+
+type RawTemplate = {
+  trade: string;
+  label: string;
+  description: string;
+  icon?: string;
+  area_label?: string;
+  required_shots: { id: string; prompt: string; tip?: string; optional?: boolean; skip_label?: string }[];
+  questions: { id: string; q: string; options: string[]; optional?: boolean }[];
+  notes?: { prompt: string };
+  outputs: string[];
+  output_labels?: Record<string, string>;
+};
+
+function load(raw: RawTemplate): TradeTemplate {
+  return {
+    trade: raw.trade,
+    title: raw.label,
+    blurb: raw.description,
+    icon: raw.icon ?? "camera",
+    areaLabel: raw.area_label ?? "Affected area",
+    requiredShots: raw.required_shots.map((s) => ({
+      id: s.id,
+      prompt: s.prompt,
+      tip: s.tip,
+      // Only optional shots can be skipped; the server rejects the rest.
+      skipLabel: s.optional ? (s.skip_label ?? "Skip") : undefined,
+    })),
+    questions: raw.questions.map((q) => ({ id: q.id, q: q.q, options: q.options, optional: q.optional ?? false })),
+    notesPrompt: raw.notes?.prompt ?? "Anything else a pro should know?",
+    outputs: raw.outputs,
+    outputLabels: raw.output_labels ?? {},
+  };
+}
+
+// Adding a trade = adding a JSON file to /templates and listing it here.
+export const templates: TradeTemplate[] = [mold, plumbingSink].map(load);
+
+export function getTemplate(trade: TradeId): TradeTemplate {
+  const t = templates.find((x) => x.trade === trade);
+  if (!t) throw new Error(`Unknown trade: ${trade}`);
+  return t;
+}

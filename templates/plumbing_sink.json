@@ -1,0 +1,33 @@
+{
+  "trade": "plumbing_sink",
+  "label": "Leaking sink",
+  "description": "Drips, puddles or water damage under or around a sink.",
+  "icon": "tool",
+  "area_label": "Wet area",
+  "required_shots": [
+    { "id": "under_sink_wide", "prompt": "Open the cabinet and show everything under the sink", "tip": "Use your phone light if it's dark under there.", "hint": "The whole cabinet space under the sink: pipes, drain and cabinet floor." },
+    { "id": "leak_closeup", "prompt": "Get close to where the water is coming from", "tip": "Focus on the drip, stain or wet spot.", "hint": "A sharp close-up of the wet spot, drip or joint that leaks." },
+    { "id": "faucet_top", "prompt": "Show the faucet and sink from above", "tip": "Include the counter, faucet and basin.", "hint": "The faucet, handles and sink basin from above.", "optional": true, "skip_label": "The leak isn't near the faucet" },
+    { "id": "shutoff_valves", "prompt": "Show the shut-off valves on the pipes", "tip": "They're usually on the pipes under the sink or on the wall.", "hint": "The small valves on the hot and cold supply lines under the sink.", "optional": true, "skip_label": "I can't find them" }
+  ],
+  "questions": [
+    { "id": "leak_rate", "q": "How bad is the leak?", "options": ["Slow drip", "Steady drip", "Only when the tap runs", "Constant flow"] },
+    { "id": "water_off", "q": "Is the water to the sink turned off?", "options": ["Yes", "No", "Not sure"] },
+    { "id": "age", "q": "How old is the sink or faucet?", "options": ["< 5 years", "5-15 years", "15+ years", "Not sure"], "optional": true }
+  ],
+  "notes": { "enabled": true, "prompt": "Anything else? (optional)" },
+  "outputs": ["affected_area_m2", "severity", "leak_location", "likely_cause", "recommended_service"],
+  "output_labels": {
+    "leak_location": "Leak location",
+    "likely_cause": "Likely cause",
+    "recommended_service": "Recommended service"
+  },
+  "policy": {
+    "finding_wording": "Leak visible, on-site inspection recommended.",
+    "rules": [
+      "Describe what is visible; say 'likely' for any cause.",
+      "affected_area_m2 is the area of visible water damage (often under 0.5)."
+    ]
+  },
+  "virtual_call_label": "Book a virtual plumbing assessment"
+}
