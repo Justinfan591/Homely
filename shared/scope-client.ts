@@ -15,13 +15,21 @@ import type {
   ProJobDetail,
   ProProvider,
   ProQueueResponse,
-  RateCard,
+  ProfilePricing,
+  ProfileView,
   ScanPhotoInfo,
   ScanResponse,
   ShotResult,
   Slot,
   TemplateSummary,
 } from "./scope";
+
+export type ProfileAction =
+  | { action: "start" | "retry" | "skip" }
+  | { action: "answer"; answer: string[]; note?: string | null }
+  | { action: "pricing"; pricing: ProfilePricing }
+  | { action: "description"; description: string }
+  | { action: "website"; url: string };
 
 export type SessionUser = { id: number; name: string; email: string; role: "customer" | "provider" | "agent" };
 export type AuthResponse = { token: string; user: SessionUser };
@@ -55,7 +63,7 @@ export class ScopeApiError extends Error {
   }
 }
 
-type CallOptions = { method?: "GET" | "POST" | "PUT"; body?: unknown; form?: FormData; provider?: number; auth?: boolean };
+type CallOptions = { method?: "GET" | "POST" | "PUT" | "DELETE"; body?: unknown; form?: FormData; provider?: number; auth?: boolean };
 
 export function createScopeClient(options: ScopeClientOptions = {}) {
   const base = (options.baseUrl ?? "").replace(/\/+$/, "");
@@ -127,9 +135,11 @@ export function createScopeClient(options: ScopeClientOptions = {}) {
       skipShot: (scanId: number, shotId: string) => call<ShotResult>(scanPath(scanId, "skip"), { body: { shotId } }),
       /** Tap answers + optional note → JobSpec. Takes a few seconds with real AI. */
       finish: (scanId: number, answers: Record<string, string>, notes?: string | null) => call<ScanResponse>(scanPath(scanId, "finish"), { body: { answers, notes } }),
-      /** "Book [Provider] · [time]" with a provider from `matches`; `slot` is the requested `startsAt`. Also used to rebook after a decline. */
-      book: (scanId: number, providerId: number, slot?: string) => call<ScanResponse>(scanPath(scanId, "book"), { body: { providerId, slot } }),
-      /** No pro in range (or all declined): virtual call with the trade's partner, optionally at a requested `slot`. */
+      /** "Get offers": sends the spec to every matching pro at once. `slot` is an optional preferred `startsAt`. Poll `scan()` for `offers`. */
+      requestOffers: (scanId: number, slot?: string) => call<ScanResponse>(scanPath(scanId, "request"), { body: { slot } }),
+      /** Accept one of `offers`: that pro gets the job at that price and time. */
+      acceptOffer: (scanId: number, offerId: number) => call<ScanResponse>(`${scanPath(scanId, "offers")}/${offerId}/accept`, { method: "POST" }),
+      /** No pro in range (or all passed): virtual call with the trade's partner, optionally at a requested `slot`. */
       requestVirtualCall: (scanId: number, slot?: string) => call<ScanResponse>(scanPath(scanId, "virtual-call"), { body: { slot } }),
       /** Bookable times (for a virtual call when there are no `matches`). */
       slots: () => call<{ slots: Slot[] }>("/api/slots"),
@@ -148,14 +158,20 @@ export function createScopeClient(options: ScopeClientOptions = {}) {
       return {
         queue: () => call<ProQueueResponse>("/api/pro/queue", p),
         job: (jobId: number) => call<ProJobDetail>(job(jobId), p),
-        /** `slot` is a `slots[].startsAt`; `price` must be within `quote.low`–`quote.high`. */
+        /** Take a routed or review job directly. `slot` is a `slots[].startsAt`; any price ($1–$100,000). */
         accept: (jobId: number, input: { slot: string; price: number }) => call<ProJobDetail>(job(jobId, "accept"), { ...p, body: input }),
+        /** Send or update an offer on an open request (status "open"). `quote` is only a suggestion. */
+        offer: (jobId: number, input: { slot: string; price: number }) => call<ProJobDetail>(job(jobId, "offer"), { ...p, body: input }),
+        withdrawOffer: (jobId: number) => call<ProJobDetail>(job(jobId, "offer"), { ...p, method: "DELETE" }),
         askForMore: (jobId: number, input: Partial<MoreInfoRequest>) => call<ProJobDetail>(job(jobId, "ask-more"), { ...p, body: input }),
-        decline: (jobId: number) => call<ProJobDetail>(job(jobId, "decline"), { ...p, method: "POST" }),
+        /** Decline a routed job, or pass on an open request (returns `{ passed: true }`; it leaves your queue). */
+        decline: (jobId: number) => call<ProJobDetail | { passed: true }>(job(jobId, "decline"), { ...p, method: "POST" }),
         routeToVirtualCall: (jobId: number) => call<ProJobDetail>(job(jobId, "virtual-call"), { ...p, method: "POST" }),
         setStatus: (jobId: number, to: "en_route" | "done") => call<ProJobDetail>(job(jobId, "status"), { ...p, body: { to } }),
-        rateCard: () => call<{ rateCard: RateCard }>("/api/pro/rate-card", p),
-        saveRateCard: (card: RateCard) => call<{ provider: ProProvider }>("/api/pro/rate-card", { ...p, method: "PUT", body: card }),
+        /** The profile interview: status, the open question, and the pricing prefill. */
+        profile: () => call<ProfileView>("/api/pro/profile", p),
+        /** One interview step. "pricing" ends it (and later edits prices): the rate card is built from these numbers. */
+        profileAction: (body: ProfileAction) => call<ProfileView>("/api/pro/profile", { ...p, body }),
       };
     },
 

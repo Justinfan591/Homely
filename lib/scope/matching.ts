@@ -2,7 +2,7 @@ import "server-only";
 import { eq } from "drizzle-orm";
 import { db, schema } from "@/db";
 import type { Provider } from "@/db/schema";
-import { quote, type ProviderMatch, type Slot } from "@/shared/scope";
+import { FIT_MIN, suggestedQuote, suggestionFor, type PriceSuggestion, type ProviderFit, type ProviderMatch, type Slot } from "@/shared/scope";
 
 /** Great-circle distance in km. */
 export function distanceKm(a: { lat: number; lng: number }, b: { lat: number; lng: number }) {
@@ -41,35 +41,55 @@ export function slotsFor(now = new Date()): Slot[] {
   return list.map((d, i) => ({ id: `s${i + 1}`, startsAt: d.toISOString() }));
 }
 
-export function toMatch(p: Provider, home: { lat: number; lng: number }, spec: { severity: number; areaM2: number }): ProviderMatch {
+type PricedSpec = { severity: number; areaM2: number; priceSuggestions?: PriceSuggestion[] | null };
+
+export function toMatch(p: Provider, home: { lat: number; lng: number }, spec: PricedSpec, fitReason: string | null = null): ProviderMatch {
   const km = distanceKm(home, p);
   return {
+    fitReason,
     id: p.id,
     name: p.name,
     rating: p.rating,
     ratingCount: p.ratingCount,
     distanceKm: Math.round(km * 10) / 10,
     etaMinutes: etaMinutes(km),
-    quote: quote(p.rateCard, spec),
+    quote: suggestedQuote(p.rateCard, spec, suggestionFor(spec, p.id)?.adjustPct),
     slots: slotsFor(),
   };
 }
 
-/** Providers for this trade within their service radius, best rating first, then shortest ETA. */
-export function matchProviders(
-  trade: string,
-  home: { lat: number; lng: number },
-  spec: { severity: number; areaM2: number },
-  exclude: number[] = [],
-): ProviderMatch[] {
+/** Active providers for this trade whose service radius covers the home. */
+export function providersInRange(trade: string, home: { lat: number; lng: number }, exclude: number[] = []): Provider[] {
   return db
     .select()
     .from(schema.providers)
     .where(eq(schema.providers.active, true))
     .all()
-    .filter((p) => p.trades.includes(trade) && !exclude.includes(p.id) && distanceKm(home, p) <= p.radiusKm)
-    .map((p) => toMatch(p, home, spec))
-    .sort((a, b) => b.rating - a.rating || a.etaMinutes - b.etaMinutes);
+    .filter((p) => p.trades.includes(trade) && !exclude.includes(p.id) && distanceKm(home, p) <= p.radiusKm);
+}
+
+/**
+ * Providers for this trade within their service radius.
+ * With the matching agent's `fit` (see fit.ts): its order, poor fits dropped while a better one is left.
+ * Without it, or for pros it didn't rank: best rating first, then shortest ETA.
+ */
+export function matchProviders(
+  trade: string,
+  home: { lat: number; lng: number },
+  spec: PricedSpec & { fit?: ProviderFit[] | null },
+  exclude: number[] = [],
+): ProviderMatch[] {
+  const fit = spec.fit ?? [];
+  const rankOf = (id: number) => {
+    const i = fit.findIndex((f) => f.providerId === id);
+    return i < 0 ? fit.length : i;
+  };
+  const matches = providersInRange(trade, home, exclude)
+    .map((p) => toMatch(p, home, spec, fit.find((f) => f.providerId === p.id)?.reason ?? null))
+    .sort((a, b) => rankOf(a.id) - rankOf(b.id) || b.rating - a.rating || a.etaMinutes - b.etaMinutes);
+  const poor = new Set(fit.filter((f) => f.score < FIT_MIN).map((f) => f.providerId));
+  const good = matches.filter((m) => !poor.has(m.id));
+  return good.length ? good : matches;
 }
 
 /** Who takes virtual calls for a trade when nobody is in range (Mold Busters for mold). */

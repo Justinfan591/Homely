@@ -58,7 +58,7 @@ async function submit(provider: number, html: string, marker: string, fields: Re
   return new URL(res.headers.get("location")!, BASE).searchParams;
 }
 
-/** min / max / value of the Accept price input, and the slot radios in order. */
+/** min / max / value of the first price input (Send offer or Accept), and the slot radios in order. */
 function acceptForm(html: string) {
   const tag = html.match(/<input[^>]*name="price"[^>]*>/)?.[0] ?? "";
   const n = (a: string) => Number(tag.match(new RegExp(`${a}="(\\d+)"`))?.[1]);
@@ -129,30 +129,32 @@ async function main() {
     assert.ok(outcome.spec.fields.some((f) => f.label === "Likely moisture source"), "labelled fields");
     ok(`${outcome.spec.title}: severity ${outcome.spec.severity}, ${outcome.spec.areaM2} m², ${top.provider.name} ${top.price.low}–${top.price.high}`);
 
-    step("Book with a requested time → Home Record and /pro");
+    step("Get offers with a preferred time → every pro sees it at once");
     const requested = top.slots[1];
-    let job: Job = await app.bookJob(scan.id, top.provider.id, requested.id);
-    assert.deepEqual([job.status, job.slotConfirmed, job.slot?.start], ["pending", false, requested.start]);
-    ok(`booked, waiting for the pro; requested ${requested.label}`);
+    let job: Job = await app.requestOffers(scan.id, requested.id);
+    assert.deepEqual([job.status, job.slot?.start, job.offers?.length, job.invitedCount], ["collecting", requested.start, 0, outcome.options.length]);
+    ok(`sent to ${job.invitedCount} pros; preferred ${requested.label}`);
     let rec = (await app.listRecord(home.id)).find((r) => r.id === scan.id)!;
-    assert.equal(rec.status, "awaiting");
+    assert.deepEqual([rec.status, rec.href], ["awaiting", `/track/${scan.id}`]);
     assert.equal((await fetch(rec.photoUri!)).status, 200);
-    ok("Home Record: awaiting confirmation, with a thumbnail");
+    ok("Home Record: waiting for offers, with a thumbnail");
     const jobId = db.select().from(schema.scopeJobs).where(eq(schema.scopeJobs.scanId, Number(scan.id))).get()!.id;
-    assert.ok(await inTab(mb.id, "new", jobId), "in New");
+    assert.ok(await inTab(mb.id, "new", jobId), "in Mold Busters' New");
+    assert.ok(await inTab(cs.id, "new", jobId), "in ClearSpore's New");
     let html = await proPage(mb.id, `&tab=new&job=${jobId}`);
+    assert.ok(html.includes("Open for offers"), "open badge");
     assert.ok(html.includes("Homeowner&#x27;s pick") || html.includes("Homeowner's pick"), "requested slot badge");
     assert.equal(acceptForm(html).slots[0], requested.start);
-    ok("/pro New tab lists it, with the homeowner's time pre-selected");
+    ok("/pro: both pros see the open request, the homeowner's time pre-selected");
 
-    step("Ask for more (a shot + a question) → phone rescans only those → back in New");
+    step("Ask for more (a shot + a question) → phone rescans only those → open again");
     await submit(mb.id, html, "Send to homeowner", { job: String(jobId), tab: "new", shots: ["closeup_affected"], questions: ["smell"], message: "A bit closer please." });
     assert.ok(await inTab(mb.id, "new", jobId), "stays in New while waiting");
     assert.ok((await proPage(mb.id, "&tab=new")).includes("Waiting for homeowner"));
     rec = (await app.listRecord(home.id)).find((r) => r.id === scan.id)!;
-    assert.deepEqual([rec.status, rec.followUp?.message, rec.href], ["needs_info", "A bit closer please.", `/scan/${scan.id}`]);
+    assert.deepEqual([rec.status, rec.followUp?.message, rec.followUp?.provider, rec.href], ["needs_info", "A bit closer please.", "Mold Busters", `/scan/${scan.id}`]);
     assert.equal((await app.getJob(job.id)).status, "more_info");
-    ok("phone shows the banner and the request");
+    ok("phone shows the banner and the request, naming the pro who asked");
     scan = await app.getScan(scan.id);
     assert.deepEqual([scan.pendingShotIds, scan.followUp?.questionIds], [["closeup_affected"], ["smell"]]);
     ok("opening it asks for just the close-up and the smell question");
@@ -160,23 +162,40 @@ async function main() {
     await app.submitAnswers(scan.id, { smell: "No" }, "It's dry now.");
     const again = await app.getSpecOutcome(scan.id);
     assert.deepEqual([again.kind, again.kind === "submitted" && again.jobId], ["submitted", scan.id]);
-    assert.equal((await app.getJob(job.id)).status, "pending");
+    assert.equal((await app.getJob(job.id)).status, "collecting");
     html = await proPage(mb.id, `&tab=new&job=${jobId}`);
     const notes = html.match(/<h4>Notes<\/h4>[\s\S]*?<\/div>/)?.[0] ?? "";
     assert.ok(html.includes("spec v<!-- -->2") || html.includes("spec v2"), "spec v2");
     assert.ok(notes.includes("Reply to the pro:") && notes.includes("dry now."), `reply in notes: ${notes}`);
-    ok("spec v2 back in the pro's New tab with the reply; phone goes to tracking");
+    ok("spec v2 open again for every pro, with the reply; phone goes to tracking");
 
-    step("Accept: out-of-range price refused, then the requested slot confirmed");
+    step("Offers: two pros send their own price and time; phone lists them cheapest first");
     const f = acceptForm(html);
-    let q = await submit(mb.id, html, "Confirm booking", { job: String(jobId), tab: "new", slot: f.slots[0], price: String(f.max + 50) });
-    assert.match(q.get("error") ?? "", /Price must be between/);
+    let q = await submit(mb.id, html, "Send offer", { job: String(jobId), tab: "new", slot: f.slots[0], price: "0" });
+    assert.match(q.get("error") ?? "", /price between/);
     ok(`refused: ${q.get("error")}`);
-    q = await submit(mb.id, html, "Confirm booking", { job: String(jobId), tab: "new", slot: f.slots[0], price: String(f.value) });
-    assert.equal(q.get("tab"), "active");
+    q = await submit(mb.id, html, "Send offer", { job: String(jobId), tab: "new", slot: f.slots[0], price: String(f.value) });
+    assert.match(q.get("notice") ?? "", /Offer sent/);
+    const csHtml = await proPage(cs.id, `&tab=new&job=${jobId}`);
+    const csForm = acceptForm(csHtml);
+    const csPrice = csForm.value * 3; // well outside the rate-card range: any price is allowed
+    await submit(cs.id, csHtml, "Send offer", { job: String(jobId), tab: "new", slot: csForm.slots[1], price: String(csPrice) });
+    assert.ok((await proPage(mb.id, "&tab=new")).includes("Your offer"), "offer badge on the card");
     job = await app.getJob(job.id);
-    assert.deepEqual([job.status, job.slotConfirmed, job.slot?.start, job.price], ["accepted", true, requested.start, { low: f.value, high: f.value }]);
+    assert.deepEqual(job.offers?.map((o) => o.provider.name), ["Mold Busters", "ClearSpore Remediation"]);
+    assert.deepEqual(job.offers?.map((o) => o.price), [f.value, csPrice]);
+    ok(`phone: ${job.offers!.map((o) => `${o.provider.name} $${o.price} ${o.slot.label}`).join("; ")}`);
+    rec = (await app.listRecord(home.id)).find((r) => r.id === scan.id)!;
+    assert.deepEqual([rec.status, rec.offerCount, rec.bestOffer?.price], ["offers", 2, f.value]);
+    ok("Home Record: 2 offers, lowest first (drives the notification)");
+
+    step("Homeowner accepts one offer → that pro is booked; the other drops it");
+    job = await app.acceptOffer(job.id, job.offers![0].id);
+    assert.deepEqual([job.status, job.slotConfirmed, job.slot?.start, job.price, job.providerName], ["accepted", true, requested.start, { low: f.value, high: f.value }, "Mold Busters"]);
     ok(`phone: ${job.providerName} booked ${job.slot?.label}, $${f.value}`);
+    assert.ok(!(await inTab(cs.id, "new", jobId)), "gone from ClearSpore's queue");
+    assert.ok(await inTab(mb.id, "active", jobId), "in Mold Busters' Active");
+    ok("ClearSpore no longer sees it; Mold Busters has it in Active");
 
     step("Stepper drives the phone; homeowner rates");
     html = await proPage(mb.id, `&tab=active&job=${jobId}`);
@@ -194,25 +213,24 @@ async function main() {
     assert.equal((await app.listRecord(home.id)).find((r) => r.id === scan.id)?.status, "done");
     ok("done, rated 5, in the pro's Done tab and the Home Record");
 
-    step("Decline → phone offers the next pro → all decline → virtual call at a picked time");
+    step("Pass: every pro passes → phone offers a virtual call at a picked time");
     const d = await scanAndEstimate("mold");
     assert.equal(d.outcome.kind, "match");
-    await app.bookJob(d.scanId, String(mb.id), (d.outcome as Extract<SpecOutcome, { kind: "match" }>).options[0].slots[0].id);
+    await app.requestOffers(d.scanId);
     const dJob = db.select().from(schema.scopeJobs).where(eq(schema.scopeJobs.scanId, Number(d.scanId))).get()!.id;
-    await submit(mb.id, await proPage(mb.id, `&tab=new&job=${dJob}`), "Decline", { job: String(dJob), tab: "new" });
-    assert.equal((await app.getJob(d.scanId)).status, "declined");
-    let next = await app.getSpecOutcome(d.scanId);
-    assert.ok(next.kind === "match" && next.options.every((o) => o.provider.name !== "Mold Busters") && next.options[0].provider.name === "ClearSpore Remediation");
-    ok("Mold Busters declined; ClearSpore offered instead");
-    await app.bookJob(d.scanId, String(cs.id), next.kind === "match" ? next.options[0].slots[0].id : "");
-    assert.equal((await app.getJob(d.scanId)).providerName, "ClearSpore Remediation");
-    await submit(cs.id, await proPage(cs.id, `&tab=new&job=${dJob}`), "Decline", { job: String(dJob), tab: "new" });
-    next = await app.getSpecOutcome(d.scanId);
-    assert.equal(next.kind, "no_provider");
+    await submit(mb.id, await proPage(mb.id, `&tab=new&job=${dJob}`), ">Pass<", { job: String(dJob), tab: "new" });
+    let dj = await app.getJob(d.scanId);
+    assert.deepEqual([dj.status, dj.passedCount], ["collecting", 1]);
+    assert.ok(!(await inTab(mb.id, "new", dJob)) && (await inTab(cs.id, "new", dJob)));
+    ok("Mold Busters passed; still open for ClearSpore");
+    await submit(cs.id, await proPage(cs.id, `&tab=new&job=${dJob}`), ">Pass<", { job: String(dJob), tab: "new" });
+    dj = await app.getJob(d.scanId);
+    assert.equal(dj.passedCount, dj.invitedCount);
+    assert.equal((await app.getSpecOutcome(d.scanId)).kind, "no_provider");
     const vSlots = await app.listVirtualSlots();
     const v = await app.bookVirtualCall(d.scanId, vSlots[2].id);
     assert.deepEqual([v.status, v.virtual, v.slot?.start], ["pending", true, vSlots[2].start]);
-    ok(`nobody left nearby → virtual call requested for ${vSlots[2].label}`);
+    ok(`everyone passed → virtual call requested for ${vSlots[2].label}`);
 
     step("Talk to a person → Needs review → routed to a virtual call; homeowner cancels");
     const hScan = await scanAndEstimate("mold", ["ceiling_above"]);
@@ -251,13 +269,30 @@ async function main() {
     assert.equal((await restarted.getSpecOutcome(lost.id)).kind, "match");
     ok("answering again gives the estimate");
 
-    step("Rate card re-prices the queue");
+    step("Profile questions, then the pricing step re-prices the queue");
     const r = await scanAndEstimate("mold");
     assert.equal(r.outcome.kind, "match");
-    await app.bookJob(r.scanId, String(mb.id), (r.outcome as Extract<SpecOutcome, { kind: "match" }>).options[0].slots[0].id);
+    await app.requestOffers(r.scanId);
     const rJob = db.select().from(schema.scopeJobs).where(eq(schema.scopeJobs.scanId, Number(r.scanId))).get()!.id;
     const spec = db.select().from(schema.jobSpecs).where(eq(schema.jobSpecs.scanId, Number(r.scanId))).get()!;
-    await submit(mb.id, await proPage(mb.id, "&tab=rates"), "per_m2", { base: "200", per_m2: "50", m1: "1", m2: "1", m3: "1", m4: "1", m5: "1" });
+    db.update(schema.providers).set({ profile: null }).where(eq(schema.providers.id, mb.id)).run();
+    const dash = await proPage(mb.id);
+    assert.match(dash, /Finish profile/);
+    assert.doesNotMatch(dash, /Rate card/);
+    ok("dashboard nudges to finish the profile; no rate card tab");
+    await submit(mb.id, await proPage(mb.id, "&tab=profile"), ">Start<", {});
+    let asked = 0;
+    for (let html = await proPage(mb.id, "&tab=profile"); html.includes('name="answer"'); html = await proPage(mb.id, "&tab=profile")) {
+      assert.ok(++asked <= 8, "the interview stops by 8 questions");
+      const first = html.match(/name="answer" value="([^"]+)"/)![1];
+      const back = await submit(mb.id, html, 'name="answer"', { answer: first });
+      assert.equal(back.get("error"), null, `answer ${asked}: ${back.get("error")}`);
+    }
+    assert.ok(asked >= 4);
+    ok(`answered ${asked} profile questions`);
+    await submit(mb.id, await proPage(mb.id, "&tab=profile"), 'name="callOut"', { finishing: "1", callOut: "200", perM2: "50", severePct: "0" });
+    assert.doesNotMatch(await proPage(mb.id), /Finish profile/);
+    ok("profile complete; the nudge is gone");
     const want = Math.round((200 + 50 * spec.areaM2) / 5) * 5;
     assert.equal(acceptForm(await proPage(mb.id, `&tab=new&job=${rJob}`)).value, want);
     ok(`(200 + 50 × ${spec.areaM2}) × 1 → $${want}`);
@@ -269,12 +304,13 @@ async function main() {
       const jobs = db.select().from(schema.scopeJobs).where(inArray(schema.scopeJobs.scanId, ids)).all();
       db.transaction((tx) => {
         if (jobs.length) tx.delete(schema.ratings).where(inArray(schema.ratings.jobId, jobs.map((j) => j.id))).run();
+        if (jobs.length) tx.delete(schema.offers).where(inArray(schema.offers.jobId, jobs.map((j) => j.id))).run();
         tx.delete(schema.scopeJobs).where(inArray(schema.scopeJobs.scanId, ids)).run();
         tx.delete(schema.jobSpecs).where(inArray(schema.jobSpecs.scanId, ids)).run();
         tx.delete(schema.scanPhotos).where(inArray(schema.scanPhotos.scanId, ids)).run();
         tx.delete(schema.scans).where(inArray(schema.scans.id, ids)).run();
         for (const s of snapshot) {
-          tx.update(schema.providers).set({ rating: s.rating, ratingCount: s.ratingCount, rateCard: s.rateCard }).where(eq(schema.providers.id, s.id)).run();
+          tx.update(schema.providers).set({ rating: s.rating, ratingCount: s.ratingCount, rateCard: s.rateCard, description: s.description, profile: s.profile }).where(eq(schema.providers.id, s.id)).run();
         }
       });
       for (const id of ids) fs.rmSync(path.join(process.cwd(), "uploads", `scan-${id}`), { recursive: true, force: true });

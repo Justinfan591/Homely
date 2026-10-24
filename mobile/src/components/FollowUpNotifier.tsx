@@ -20,6 +20,8 @@ export function FollowUpNotifier() {
   const { home } = useHome();
   const record = useRecord(home?.id); // same SWR key as the home screen, so no extra polling
   const seen = useRef<Set<string> | null>(null);
+  // Offers seen per record, so each new offer notifies once.
+  const offerCounts = useRef<Map<string, number> | null>(null);
 
   useEffect(() => {
     if (Platform.OS === "web") return;
@@ -59,6 +61,31 @@ export function FollowUpNotifier() {
     }
     // Answered requests can come back later (a second "ask for more").
     for (const id of seen.current) if (!waiting.some((i) => i.id === id)) seen.current.delete(id);
+  }, [record.data]);
+
+  // "New offer": a pro answered the homeowner's open request with a price and time.
+  useEffect(() => {
+    if (Platform.OS === "web" || !record.data) return;
+    const counts = new Map(record.data.map((i) => [i.id, i.offerCount ?? 0]));
+    if (!offerCounts.current) {
+      offerCounts.current = counts;
+      return;
+    }
+    for (const item of record.data) {
+      const before = offerCounts.current.get(item.id) ?? 0;
+      const now = item.offerCount ?? 0;
+      if (now <= before || !item.bestOffer) continue;
+      console.log(`[notify] ${now - before} new offer(s) on scan ${item.id}`);
+      Notifications.scheduleNotificationAsync({
+        content: {
+          title: now === 1 ? "You have an offer" : `${now} offers in`,
+          body: `Lowest so far: $${Math.round(item.bestOffer.price).toLocaleString("en-US")} from ${item.bestOffer.provider}. Tap to pick one.`,
+          data: { href: item.href },
+        },
+        trigger: null,
+      }).catch((err) => console.warn("[notify] couldn't show the notification:", err));
+    }
+    offerCounts.current = counts;
   }, [record.data]);
 
   return null;

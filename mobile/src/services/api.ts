@@ -42,7 +42,10 @@ export interface ScopeApi {
   getSpecOutcome(scanId: string): Promise<SpecOutcome>;
   getSpec(specId: string): Promise<JobSpec>;
 
-  bookJob(scanId: string, providerId: string, slotId: string): Promise<Job>;
+  /** "Get offers": sends the spec to every matching pro at once. `slotId` is an optional preferred time. */
+  requestOffers(scanId: string, slotId?: string): Promise<Job>;
+  /** Picks one of `job.offers`: that pro is booked at that price and time. */
+  acceptOffer(jobId: string, offerId: string): Promise<Job>;
   bookVirtualCall(scanId: string, slotId: string): Promise<Job>;
   listVirtualSlots(): Promise<Slot[]>;
   /** Polled by the Track screen. */

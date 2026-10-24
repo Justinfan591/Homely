@@ -13,6 +13,7 @@ import { Text } from "./Text";
 const STATUS: Record<RecordStatus, { label: string; tone: "neutral" | "accent" | "success" | "warn" }> = {
   in_progress: { label: "Draft", tone: "neutral" },
   needs_info: { label: "Pro needs more", tone: "accent" },
+  offers: { label: "Offers in — pick one", tone: "accent" },
   awaiting: { label: "Awaiting confirmation", tone: "warn" },
   scheduled: { label: "Scheduled", tone: "accent" },
   en_route: { label: "On the way", tone: "accent" },
@@ -24,7 +25,10 @@ const STATUS: Record<RecordStatus, { label: string; tone: "neutral" | "accent" |
 
 export function RecordRow({ item }: { item: RecordItem }) {
   const template = getTemplate(item.trade);
-  const status = STATUS[item.status];
+  const status =
+    item.status === "offers" && item.offerCount
+      ? { ...STATUS.offers, label: `${item.offerCount} ${item.offerCount === 1 ? "offer" : "offers"} — pick one` }
+      : STATUS[item.status];
   return (
     <Pressable
       accessibilityRole="button"

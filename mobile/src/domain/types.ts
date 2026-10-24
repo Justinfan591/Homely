@@ -100,7 +100,16 @@ export type MatchOption = {
 
 export type Home = { id: string; name: string; address: string; lat: number; lng: number };
 
-export type JobStatus = "pending" | "accepted" | "en_route" | "done" | "handoff" | "more_info" | "declined" | "cancelled";
+export type JobStatus = "collecting" | "pending" | "accepted" | "en_route" | "done" | "handoff" | "more_info" | "declined" | "cancelled";
+
+/** A pro's price and time on an open request. The homeowner accepts one. */
+export type Offer = {
+  id: string;
+  provider: ProviderSummary;
+  distanceKm: number;
+  price: number;
+  slot: Slot;
+};
 
 export type Job = {
   id: string;
@@ -122,11 +131,16 @@ export type Job = {
   virtual: boolean;
   /** The pro's request, while status is more_info. */
   followUp?: FollowUp;
+  /** While collecting: offers so far (cheapest first), and how many pros were asked / passed. */
+  offers?: Offer[];
+  invitedCount?: number;
+  passedCount?: number;
 };
 
 export type RecordStatus =
   | "in_progress"
   | "needs_info"
+  | "offers"
   | "awaiting"
   | "scheduled"
   | "en_route"
@@ -148,6 +162,9 @@ export type RecordItem = {
   href: string;
   /** Provider's request, when status is needs_info. */
   followUp?: FollowUp;
+  /** Active offers while the request is open, and the cheapest one. */
+  offerCount?: number;
+  bestOffer?: { price: number; provider: string } | null;
 };
 
 export type SpecOutcome =

@@ -4,6 +4,7 @@ import { slotLabel } from "@/domain/format";
 import type {
   Job,
   JobSpec,
+  Offer,
   PhotoVerdict,
   RecordItem,
   Scan,
@@ -27,6 +28,8 @@ export const mockConfig = {
   etaStepMs: 1_500,
   etaStartMinutes: 14,
   virtualDoneAfterMs: 20_000,
+  /** After "Get offers", one pro's offer arrives every this many ms. */
+  offerEveryMs: 3_000,
 };
 
 // Reachable from the debugger / test scripts (the mock layer is replaced wholesale by the real client).
@@ -39,6 +42,8 @@ const outcomes = new Map<string, SpecOutcome>();
 const attempts = new Map<string, number>();
 const retakes = new Map<string, number>();
 const simulated = new Set<string>();
+/** Offers each pro will send for an open request, revealed one at a time. */
+const pendingOffers = new Map<string, Offer[]>();
 let counter = 100;
 
 const id = (prefix: string) => `${prefix}_${++counter}`;
@@ -148,6 +153,13 @@ function buildSpec(scan: Scan): JobSpec {
 
 /** Stands in for the provider accepting and driving to the house. Derived from elapsed time. */
 function advance(job: Job): Job {
+  if (job.status === "collecting") {
+    const all = pendingOffers.get(job.id) ?? [];
+    const shown = Math.min(all.length, Math.floor((Date.now() - new Date(job.createdAt).getTime()) / mockConfig.offerEveryMs));
+    const next = { ...job, offers: all.slice(0, shown).sort((a, b) => a.price - b.price) };
+    jobs.set(job.id, next);
+    return next;
+  }
   if (!simulated.has(job.id) || job.status === "handoff") return job;
   const t = Date.now() - new Date(job.createdAt).getTime();
   const c = mockConfig;
@@ -192,8 +204,26 @@ export const mockApi: ScopeApi = {
         if (job) {
           const j = advance(job);
           const status: RecordItem["status"] =
-            j.status === "pending" ? "awaiting" : j.status === "accepted" ? "scheduled" : j.status === "more_info" ? "needs_info" : j.status;
-          items.push({ ...base, status, price: j.price, href: `/track/${j.id}` });
+            j.status === "collecting"
+              ? j.offers?.length
+                ? "offers"
+                : "awaiting"
+              : j.status === "pending"
+                ? "awaiting"
+                : j.status === "accepted"
+                  ? "scheduled"
+                  : j.status === "more_info"
+                    ? "needs_info"
+                    : j.status;
+          const best = j.offers?.[0];
+          items.push({
+            ...base,
+            status,
+            price: j.price,
+            href: `/track/${j.id}`,
+            offerCount: j.offers?.length ?? 0,
+            bestOffer: best ? { price: best.price, provider: best.provider.name } : null,
+          });
         } else if (scan.followUp && scan.pendingShotIds.length) {
           items.push({ ...base, status: "needs_info", price: null, href: `/scan/${scan.id}`, followUp: scan.followUp });
         } else {
@@ -301,32 +331,71 @@ export const mockApi: ScopeApi = {
 
   getSpec: (specId) => call("getSpec", 120, () => need(specs.get(specId), "Spec")),
 
-  bookJob: (scanId, providerId, slotId) =>
-    call("bookJob", 900, () => {
+  requestOffers: (scanId, slotId) =>
+    call("requestOffers", 700, () => {
       const existing = jobForScan(scanId);
       if (existing) return existing;
       const outcome = outcomes.get(scanId);
       if (outcome?.kind !== "match") throw new ApiError("This estimate is no longer available.", "rejected");
-      const option = need(outcome.options.find((o) => o.provider.id === providerId), "Provider");
-      const slot = need(option.slots.find((s) => s.id === slotId), "Time slot");
+      const spec = outcome.spec;
       const job: Job = {
         id: id("job"),
-        specId: outcome.spec.id,
+        specId: spec.id,
         scanId,
         homeId: scans.get(scanId)!.homeId,
-        providerName: option.provider.name,
-        providerRating: option.provider.rating,
-        status: "pending",
-        slot,
-        price: priceRange(need(providers.find((p) => p.id === option.provider.id), "Provider").rateCard, outcome.spec.areaM2, outcome.spec.severity),
+        providerName: "Pros nearby",
+        providerRating: null,
+        status: "collecting",
+        slot: outcome.options[0]?.slots.find((s) => s.id === slotId) ?? null,
+        price: null,
         etaMinutes: null,
         rating: null,
         createdAt: new Date().toISOString(),
         virtual: false,
+        offers: [],
+        invitedCount: outcome.options.length,
+        passedCount: 0,
       };
+      // Each pro prices off its own rate card, nudged a little so offers differ.
+      pendingOffers.set(
+        job.id,
+        outcome.options.map((o, i) => {
+          const range = priceRange(need(providers.find((p) => p.id === o.provider.id), "Provider").rateCard, spec.areaM2, spec.severity);
+          const mid = (range.low + range.high) / 2;
+          return {
+            id: `${job.id}_offer_${i}`,
+            provider: o.provider,
+            distanceKm: o.distanceKm,
+            price: Math.round((mid * (0.9 + ((hash(o.provider.id) % 21) / 100))) / 5) * 5,
+            slot: o.slots[(i + (slotId ? 0 : 1)) % o.slots.length],
+          };
+        }),
+      );
       jobs.set(job.id, job);
-      simulated.add(job.id);
       return job;
+    }),
+
+  acceptOffer: (jobId, offerId) =>
+    call("acceptOffer", 700, () => {
+      const job = advance(need(jobs.get(jobId), "Job"));
+      if (job.status !== "collecting") throw new ApiError("This request is no longer open.", "rejected");
+      const offer = need(job.offers?.find((o) => o.id === offerId), "Offer");
+      // Restart the simulated lifecycle as already accepted.
+      const next: Job = {
+        ...job,
+        status: "accepted",
+        providerName: offer.provider.name,
+        providerRating: offer.provider.rating,
+        slot: offer.slot,
+        slotConfirmed: true,
+        price: { low: offer.price, high: offer.price },
+        offers: [],
+        createdAt: new Date(Date.now() - mockConfig.acceptAfterMs).toISOString(),
+      };
+      jobs.set(jobId, next);
+      pendingOffers.delete(jobId);
+      simulated.add(jobId);
+      return next;
     }),
 
   listVirtualSlots: () => call("listVirtualSlots", 150, makeSlots),
@@ -390,12 +459,13 @@ export const mockApi: ScopeApi = {
   cancelJob: (jobId) =>
     call("cancelJob", 400, () => {
       const job = need(jobs.get(jobId), "Job");
-      if (!["pending", "handoff", "more_info", "declined"].includes(job.status)) {
+      if (!["collecting", "pending", "handoff", "more_info", "declined"].includes(job.status)) {
         throw new ApiError("This job can't be cancelled now. Contact the pro.", "rejected");
       }
-      const next: Job = { ...job, status: "cancelled" };
+      const next: Job = { ...job, status: "cancelled", offers: [] };
       jobs.set(jobId, next);
       simulated.delete(jobId);
+      pendingOffers.delete(jobId);
       return next;
     }),
 

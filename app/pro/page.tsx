@@ -16,8 +16,11 @@ import {
   type ProTab,
 } from "@/shared/scope";
 import { googleConfig } from "@/lib/scope/calendar";
-import { accept, advance, askMore, decline, disconnectGoogle, saveRates, virtualCall } from "./actions";
+import { accept, advance, askMore, decline, disconnectGoogle, offer, virtualCall, withdraw } from "./actions";
+import { answerProfile, retryProfile, saveProfile, saveProfilePricing, saveProviderWebsite, skipProfileQuestion, startProfile } from "./actions";
+import { DESCRIPTION_MAX, PRICE_ADJUST_MAX, PROFILE_MAX_QUESTIONS, pricingFromRateCard, profileStatus, quote, type ProfileStatus, type ProfileTurn } from "@/shared/scope";
 import { AutoRefresh } from "./AutoRefresh";
+import { SubmitButton } from "./SubmitButton";
 import { proHref } from "./href";
 import "./pro.css";
 
@@ -64,12 +67,14 @@ export default async function ProPage({ searchParams }: { searchParams: Promise<
   if (!p) return <PickProvider />;
 
   const tabs = queue(p);
-  const tab = q.tab === "rates" || (q.tab && q.tab in tabs) ? (q.tab as ProTab | "rates") : "new";
+  const tab = q.tab === "profile" || (q.tab && q.tab in tabs) ? (q.tab as ProTab | "profile") : "new";
+  const status = profileStatus(p);
   const selected = q.job ? detail(p, q.job) : null;
 
   return (
     <div className="pro">
-      <AutoRefresh />
+      {/* No polling while answering profile questions. */}
+      {tab !== "profile" && <AutoRefresh />}
       <header className="top">
         <div>
           <h1>{p.name}</h1>
@@ -89,16 +94,18 @@ export default async function ProPage({ searchParams }: { searchParams: Promise<
             {t.label} <span className="count">{tabs[t.id].length}</span>
           </Link>
         ))}
-        <Link href={proHref(p.id, { tab: "rates" })} className={tab === "rates" ? "on" : ""}>
-          Rate card
+        <Link href={proHref(p.id, { tab: "profile" })} className={tab === "profile" ? "on" : ""}>
+          Profile {status !== "complete" && <span className="count todo">Finish setup</span>}
         </Link>
       </nav>
+
+      {status !== "complete" && tab !== "profile" && <ProfileNudge providerId={p.id} status={status} />}
 
       {q.error && <p className="error">{q.error}</p>}
       {q.notice && <p className="notice">{q.notice}</p>}
 
-      {tab === "rates" ? (
-        <RateCard p={p} saved={!!q.saved} />
+      {tab === "profile" ? (
+        <Profile p={p} />
       ) : (
         <main className="split">
           <section className="queue">
@@ -166,12 +173,25 @@ function QueueCard({ card: c, providerId, tab, selected }: { card: ProQueueCard;
       </div>
       <div className="qmeta">
         <Confidence value={c.confidence} />
+        {c.status === "open" && <span className="badge badge-open">Open for offers · {c.invitedCount} pros</span>}
+        {c.status === "open" && <OfferBadge offer={c.myOffer} />}
         {c.status === "more_info" && <span className="badge wait">Waiting for homeowner</span>}
         {c.status === "handoff" && <span className="badge handoff">Handoff</span>}
         {c.status === "virtual_call" && <span className="badge">Virtual call</span>}
         {tab === "active" && <span className="badge">{JOB_STATUS_LABELS[c.status]}</span>}
       </div>
     </Link>
+  );
+}
+
+/** This pro's offer on an open request, as a short badge. */
+function OfferBadge({ offer: o }: { offer: ProQueueCard["myOffer"] }) {
+  if (!o || o.status === "withdrawn") return <span className="badge">No offer yet</span>;
+  if (o.status === "stale") return <span className="badge wait">Spec updated · re-send offer</span>;
+  return (
+    <span className="badge badge-offer">
+      Your offer: {usd(o.price)} · {slotLabel(o.slot)}
+    </span>
   );
 }
 
@@ -187,7 +207,22 @@ function SpecDetail({ d, p, tab }: { d: ProJobDetail; p: Provider; tab: ProTab }
       <input type="hidden" name="tab" value={tab} />
     </>
   );
-  const open = ["pending", "handoff", "virtual_call"].includes(status);
+  const takeable = ["pending", "handoff", "virtual_call"].includes(status);
+  const myOffer = d.myOffer && ["active", "stale"].includes(d.myOffer.status) ? d.myOffer : null;
+  const offerSlot = myOffer && d.slots.some((s) => s.startsAt === myOffer.slot) ? myOffer.slot : d.slots[0]?.startsAt;
+  // One tap: the suggested price at the first slot (the homeowner's pick when they made one).
+  const quick = (label: string, action: typeof offer) =>
+    d.slots[0] && (
+      <form action={action} className="quick">
+        {hidden}
+        <input type="hidden" name="slot" value={d.slots[0].startsAt} />
+        <input type="hidden" name="price" value={quote.price} />
+        <button className="btn primary">
+          {label} · {usd(quote.price)} · {slotLabel(d.slots[0].startsAt)}
+        </button>
+      </form>
+    );
+  const askedByMe = !job.request?.providerId || job.request.providerId === p.id;
   const steps = job.mode === "virtual" ? (["accepted", "done"] as const) : (["accepted", "en_route", "done"] as const);
   const next = status === "accepted" ? (job.mode === "virtual" ? "done" : "en_route") : status === "en_route" ? "done" : null;
 
@@ -206,11 +241,13 @@ function SpecDetail({ d, p, tab }: { d: ProJobDetail; p: Provider; tab: ProTab }
         <Confidence value={spec.confidence} />
         {job.mode === "virtual" && <span className="badge">Virtual call</span>}
       </div>
+      {d.fitReason && <p className="fit">Why you: {d.fitReason}</p>}
 
       <div className="price">
         <div>
-          <span className="muted">Calculated price</span>
-          <strong>{priceRange(quote.low, quote.high)}</strong>
+          <span className="muted">Suggested price</span>
+          <strong>{usd(quote.price)}</strong>
+          <span className="muted small">{priceRange(quote.low, quote.high)}</span>
         </div>
         {job.price != null && (
           <div>
@@ -218,7 +255,10 @@ function SpecDetail({ d, p, tab }: { d: ProJobDetail; p: Provider; tab: ProTab }
             <strong>{usd(job.price)}</strong>
           </div>
         )}
-        <span className="muted small">{ESTIMATE_LABEL}. From your rate card, not the AI.</span>
+        {d.priceReason && <p className="fit">{d.priceReason}</p>}
+        <span className="muted small">
+          {ESTIMATE_LABEL}. {d.priceReason ? "Your profile prices, adjusted for this job." : "From your profile prices."}
+        </span>
       </div>
 
       {d.photos.length > 0 && (
@@ -273,7 +313,7 @@ function SpecDetail({ d, p, tab }: { d: ProJobDetail; p: Provider; tab: ProTab }
       )}
       {status === "more_info" && job.request && (
         <div className="followup">
-          <h4>You asked for more</h4>
+          <h4>{askedByMe ? "You asked for more" : "Another pro asked for more"}</h4>
           <p>
             {[...job.request.shotIds.map(shotPrompt), ...job.request.questionIds.map((id) => template.questions.find((x) => x.id === id)?.q ?? id), job.request.message]
               .filter(Boolean)
@@ -283,10 +323,53 @@ function SpecDetail({ d, p, tab }: { d: ProJobDetail; p: Provider; tab: ProTab }
         </div>
       )}
 
-      {open && (
+      {status === "open" && (
         <div className="actions">
+          <p className="muted small" style={{ flexBasis: "100%" }}>
+            Sent to {d.invitedCount} pros at once. Send your price and time; the homeowner picks one offer.
+          </p>
+          {myOffer?.status !== "active" && quick(myOffer ? "Re-send offer" : "Send offer", offer)}
           <details>
-            <summary className="btn primary">{status === "virtual_call" ? "Accept the call" : "Accept"}</summary>
+            <summary className={myOffer?.status === "active" ? "btn primary" : "btn"}>{myOffer?.status === "active" ? "Update offer" : "Change price or time"}</summary>
+            <form action={offer} className="panel">
+              {hidden}
+              {myOffer?.status === "stale" && <p className="muted">The homeowner updated the scan, so your earlier offer was paused. Check the new spec and re-send.</p>}
+              <fieldset>
+                <legend>Time slot</legend>
+                {d.slots.map((s) => (
+                  <label key={s.startsAt}>
+                    <input type="radio" name="slot" value={s.startsAt} defaultChecked={s.startsAt === offerSlot} /> {slotLabel(s.startsAt)}
+                    {s.id === "requested" && <span className="badge">Homeowner&apos;s pick</span>}
+                  </label>
+                ))}
+              </fieldset>
+              <label>
+                Your price (USD)
+                <input type="number" name="price" min={1} step="1" defaultValue={myOffer?.price ?? quote.price} required />
+              </label>
+              <p className="muted small">Suggested {usd(quote.price)}. You can set any price.</p>
+              <button className="btn primary">{myOffer ? "Update offer" : "Send offer"}</button>
+            </form>
+          </details>
+          {myOffer?.status === "active" && (
+            <form action={withdraw}>
+              {hidden}
+              <button className="btn">Withdraw offer</button>
+            </form>
+          )}
+          <AskMore hidden={hidden} template={template} />
+          <form action={decline}>
+            {hidden}
+            <button className="btn ghost">Pass</button>
+          </form>
+        </div>
+      )}
+
+      {takeable && (
+        <div className="actions">
+          {quick(status === "virtual_call" ? "Accept the call" : "Accept", accept)}
+          <details>
+            <summary className="btn">Change price or time</summary>
             <form action={accept} className="panel">
               {hidden}
               <fieldset>
@@ -299,39 +382,14 @@ function SpecDetail({ d, p, tab }: { d: ProJobDetail; p: Provider; tab: ProTab }
                 ))}
               </fieldset>
               <label>
-                Price (USD, {priceRange(quote.low, quote.high)})
-                <input type="number" name="price" min={quote.low} max={quote.high} step="1" defaultValue={quote.price} required />
+                Price (USD)
+                <input type="number" name="price" min={1} step="1" defaultValue={quote.price} required />
               </label>
+              <p className="muted small">Suggested {usd(quote.price)}. You can set any price.</p>
               <button className="btn primary">Confirm booking</button>
             </form>
           </details>
-          <details>
-            <summary className="btn">Ask for more</summary>
-            <form action={askMore} className="panel">
-              {hidden}
-              <fieldset>
-                <legend>Photos to retake or add</legend>
-                {template.required_shots.map((s) => (
-                  <label key={s.id}>
-                    <input type="checkbox" name="shots" value={s.id} /> {s.prompt}
-                  </label>
-                ))}
-              </fieldset>
-              <fieldset>
-                <legend>Questions to ask again</legend>
-                {template.questions.map((x) => (
-                  <label key={x.id}>
-                    <input type="checkbox" name="questions" value={x.id} /> {x.q}
-                  </label>
-                ))}
-              </fieldset>
-              <label>
-                Anything else?
-                <textarea name="message" rows={3} placeholder="e.g. Is the wall soft to the touch?" maxLength={1000} />
-              </label>
-              <button className="btn primary">Send to homeowner</button>
-            </form>
-          </details>
+          <AskMore hidden={hidden} template={template} />
           {status === "handoff" ? (
             <form action={virtualCall}>
               {hidden}
@@ -385,6 +443,38 @@ function SpecDetail({ d, p, tab }: { d: ProJobDetail; p: Provider; tab: ProTab }
   );
 }
 
+function AskMore({ hidden, template }: { hidden: React.ReactNode; template: ProJobDetail["template"] }) {
+  return (
+    <details>
+      <summary className="btn">Ask for more</summary>
+      <form action={askMore} className="panel">
+        {hidden}
+        <fieldset>
+          <legend>Photos to retake or add</legend>
+          {template.required_shots.map((s) => (
+            <label key={s.id}>
+              <input type="checkbox" name="shots" value={s.id} /> {s.prompt}
+            </label>
+          ))}
+        </fieldset>
+        <fieldset>
+          <legend>Questions to ask again</legend>
+          {template.questions.map((x) => (
+            <label key={x.id}>
+              <input type="checkbox" name="questions" value={x.id} /> {x.q}
+            </label>
+          ))}
+        </fieldset>
+        <label>
+          Anything else?
+          <textarea name="message" rows={3} placeholder="e.g. Is the wall soft to the touch?" maxLength={1000} />
+        </label>
+        <button className="btn primary">Send to homeowner</button>
+      </form>
+    </details>
+  );
+}
+
 /** Connected calendar, a Connect button, or a setup hint when the OAuth client isn't configured. */
 function CalendarStatus({ p }: { p: Provider }) {
   if (p.googleCalendar) {
@@ -419,36 +509,225 @@ function googleCalendarUrl(d: ProJobDetail, providerName: string) {
   return `https://calendar.google.com/calendar/render?${params}`;
 }
 
-function RateCard({ p, saved }: { p: Provider; saved: boolean }) {
-  const c = p.rateCard;
+/** Shown on every view until the profile interview is done. */
+function ProfileNudge({ providerId, status }: { providerId: number; status: ProfileStatus }) {
+  const text =
+    status === "in_progress"
+      ? "You're partway through your profile. Finish the questions so we can send you jobs that fit."
+      : status === "summary_only"
+        ? "Matches use only your short summary right now. Answer a few quick questions so we can send you jobs that fit you."
+        : "Finish your profile to get jobs that fit you. A few quick questions, about 2 minutes.";
   return (
-    <form action={saveRates} className="card narrow-card">
-      <input type="hidden" name="provider" value={p.id} />
-      <h2>Rate card</h2>
-      <p className="muted">Prices = (base + per m² × area) × severity multiplier, shown as a ±15% range. Saving re-prices every spec in your queue.</p>
-      <div className="grid2">
-        <label>
-          Base ($)
-          <input type="number" name="base" min={0} step="any" defaultValue={c.base} required />
-        </label>
-        <label>
-          Per m² ($)
-          <input type="number" name="per_m2" min={0} step="any" defaultValue={c.per_m2} required />
-        </label>
-      </div>
-      <fieldset>
-        <legend>Severity multiplier</legend>
-        <div className="grid5">
-          {[1, 2, 3, 4, 5].map((s) => (
-            <label key={s}>
-              {SEVERITY_LABELS[s]} ({s})
-              <input type="number" name={`m${s}`} min={0} max={20} step="any" defaultValue={c.severity_multiplier[s - 1] ?? 1} required />
-            </label>
-          ))}
-        </div>
-      </fieldset>
-      {saved && <p className="ok">Saved. New prices apply now.</p>}
-      <button className="btn primary">Save rate card</button>
-    </form>
+    <div className="nudge">
+      <span>{text}</span>
+      <Link className="btn primary small-btn" href={proHref(providerId, { tab: "profile" })}>
+        {status === "in_progress" ? "Continue" : "Finish profile"}
+      </Link>
+    </div>
   );
 }
+
+/** Profile tab: the agent interview, then pricing, then the finished profile (editable). */
+function Profile({ p }: { p: Provider }) {
+  const profile = p.profile;
+  const hidden = <input type="hidden" name="provider" value={p.id} />;
+
+  if (!profile) {
+    return (
+      <div className="card narrow-card">
+        <h2>Set up your profile</h2>
+        <p className="muted">
+          Our matching agent sends each new request to the pros who fit it best. Right now it only has
+          {p.description ? " your short summary" : " your trade and distance"} to go on. Answer a few quick questions (tap to answer, about 2
+          minutes) so it knows which jobs are right for you, then set your prices.
+        </p>
+        {p.description && (
+          <p className="small">
+            <span className="muted">Current summary:</span> {p.description}
+          </p>
+        )}
+        <form action={startProfile}>
+          {hidden}
+          <label>
+            Your website (optional)
+            <input type="text" inputMode="url" name="website" maxLength={500} defaultValue={p.website ?? ""} placeholder="yourcompany.com" />
+          </label>
+          <p className="muted small">We read your website so the questions skip what it already says. Takes up to a minute.</p>
+          <SubmitButton pending="Reading your website and preparing your first question…">Start</SubmitButton>
+        </form>
+      </div>
+    );
+  }
+
+  if (profile.stage === "interview") {
+    const q = profile.pending;
+    return (
+      <div className="card narrow-card">
+        <div className="qtop">
+          <h2>Profile questions</h2>
+          <span className="muted">
+            Question {profile.turns.length + 1} of up to {PROFILE_MAX_QUESTIONS}
+          </span>
+        </div>
+        <progress className="pbar" value={profile.turns.length} max={PROFILE_MAX_QUESTIONS} />
+        {q ? (
+          <>
+            <form action={answerProfile} className="pq">
+              {hidden}
+              <h3>{q.q}</h3>
+              <p className="muted small">{q.multi ? "Pick all that apply." : "Pick one."}</p>
+              <div className="chips">
+                {q.options.map((o) => (
+                  <label key={o} className="chip">
+                    <input type={q.multi ? "checkbox" : "radio"} name="answer" value={o} />
+                    <span>{o}</span>
+                  </label>
+                ))}
+              </div>
+              <label>
+                Add detail (optional)
+                <input type="text" name="note" maxLength={500} placeholder="Anything the options miss" />
+              </label>
+              <SubmitButton pending="Thinking…">Next</SubmitButton>
+            </form>
+            <form action={skipProfileQuestion}>
+              {hidden}
+              <SubmitButton className="btn ghost" pending="Thinking…">
+                Skip this question
+              </SubmitButton>
+            </form>
+          </>
+        ) : (
+          <form action={retryProfile}>
+            {hidden}
+            <p className="muted">Your answers are saved. The assistant didn&apos;t send the next question.</p>
+            <SubmitButton pending="Thinking…">Try again</SubmitButton>
+          </form>
+        )}
+        <Answers turns={profile.turns} />
+      </div>
+    );
+  }
+
+  const pricing = pricingFromRateCard(p.rateCard);
+  const example = quote(p.rateCard, { severity: 3, areaM2: 2 });
+  const pricingForm = (finishing: boolean) => (
+    <form action={saveProfilePricing}>
+      {hidden}
+      <input type="hidden" name="finishing" value={finishing ? "1" : "0"} />
+      <div className="grid3">
+        <label>
+          Call-out fee ($)
+          <input type="number" name="callOut" min={0} step="any" defaultValue={pricing.callOut} required />
+        </label>
+        <label>
+          Price per m² ($)
+          <input type="number" name="perM2" min={0} step="any" defaultValue={pricing.perM2} required />
+        </label>
+        <label>
+          Extra for the most severe jobs (%)
+          <input type="number" name="severePct" min={0} max={1000} step="1" defaultValue={pricing.severePct} required />
+        </label>
+      </div>
+      <p className="muted small">
+        Suggested price = call-out + price per m² × area, rising to +{pricing.severePct}% for the most severe jobs, shown as a ±15% range. With
+        these numbers a 2 m² moderate job comes out at {priceRange(example.low, example.high)}. Scope then adjusts each job by up to ±{PRICE_ADJUST_MAX}% (access, urgency, what you include) and shows you why. You can still set any price on each offer.
+      </p>
+      <button className="btn primary">{finishing ? "Finish profile" : "Save prices"}</button>
+    </form>
+  );
+
+  if (profile.stage === "pricing") {
+    return (
+      <div className="card narrow-card">
+        <h2>Last step: your prices</h2>
+        <p className="muted">Your prices are the starting point for every suggestion. Scope adjusts each one for the job and tells you why.</p>
+        {pricingForm(true)}
+        {profile.draftDescription && (
+          <p className="small">
+            <span className="muted">Your profile summary:</span> {profile.draftDescription}
+          </p>
+        )}
+      </div>
+    );
+  }
+
+  const f = profile.facts;
+  return (
+    <div className="stack narrow-card">
+      <div className="card">
+        <h2>Your profile</h2>
+        <p className="ok">Complete. New requests are matched with it.</p>
+        {f && (
+          <dl>
+            <div>
+              <dt>Specialties</dt>
+              <dd>{f.specialties.join(", ")}</dd>
+            </div>
+            <div>
+              <dt>Job sizes</dt>
+              <dd>{f.jobSizes}</dd>
+            </div>
+            <div>
+              <dt>Availability</dt>
+              <dd>{f.availability}</dd>
+            </div>
+            {f.notes && (
+              <div>
+                <dt>Other</dt>
+                <dd>{f.notes}</dd>
+              </div>
+            )}
+          </dl>
+        )}
+        <form action={saveProfile}>
+          {hidden}
+          <label>
+            Summary the matching agent reads
+            <textarea name="description" rows={5} maxLength={DESCRIPTION_MAX} defaultValue={p.description ?? ""} />
+          </label>
+          <button className="btn">Save summary</button>
+        </form>
+        <form action={saveProviderWebsite}>
+          {hidden}
+          <label>
+            Website
+            <input type="text" inputMode="url" name="website" maxLength={500} defaultValue={p.website ?? ""} placeholder="yourcompany.com" />
+          </label>
+          <SubmitButton className="btn" pending="Reading your website…">
+            Save website
+          </SubmitButton>
+        </form>
+        <form action={startProfile}>
+          {hidden}
+          <SubmitButton className="btn ghost" pending="Preparing your first question…">
+            Redo the questions
+          </SubmitButton>
+        </form>
+        <Answers turns={profile.turns} />
+      </div>
+      <div className="card">
+        <h2>Prices</h2>
+        {pricingForm(false)}
+      </div>
+    </div>
+  );
+}
+
+function Answers({ turns }: { turns: ProfileTurn[] }) {
+  if (!turns.length) return null;
+  return (
+    <details className="answers">
+      <summary className="muted small">Your answers ({turns.length})</summary>
+      <dl>
+        {turns.map((t) => (
+          <div key={t.id}>
+            <dt>{t.q}</dt>
+            <dd>{t.answer.length || t.note ? [t.answer.join(", "), t.note].filter(Boolean).join(" · ") : <span className="muted">Skipped</span>}</dd>
+          </div>
+        ))}
+      </dl>
+    </details>
+  );
+}
+

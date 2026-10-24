@@ -1,4 +1,4 @@
-// Scope: trade templates, deterministic pricing and the API shapes shared by
+// Scope: trade templates, pricing (rate card + bounded AI adjustment) and the API shapes shared by
 // the server, the Expo app and the /pro dashboard. Safe to import anywhere.
 import { z } from "zod";
 
@@ -31,6 +31,8 @@ export const templateSchema = z.object({
   /** Keys the AI must fill. `severity` and `affected_area_m2` are always produced. */
   outputs: z.array(z.string().regex(/^[a-z0-9_]+$/)).min(1),
   output_labels: z.record(z.string(), z.string()).default({}),
+  /** What severity 1..5 means for this trade (the spec agent's rubric). Optional: a generic scale is used without it. */
+  severity_guide: z.array(z.string().min(1)).length(5).optional(),
   /** Wording rules shown in the UI and enforced in the prompt. */
   policy: z.object({
     /** Required standard phrasing, e.g. "Visible growth likely, testing recommended." */
@@ -44,7 +46,7 @@ export type Template = z.infer<typeof templateSchema>;
 export type Shot = Template["required_shots"][number];
 export type Question = Template["questions"][number];
 
-// ---------- Pricing (deterministic; the AI never prices) ----------
+// ---------- Pricing (rate card formula; the pricing agent may only nudge it by ±PRICE_ADJUST_MAX%) ----------
 
 export const rateCardSchema = z.object({
   base: z.number().min(0).max(100000),
@@ -65,6 +67,25 @@ export function quote(card: RateCard, spec: { severity: number; areaM2: number }
 }
 export type Quote = ReturnType<typeof quote>;
 
+/** The pricing agent can move a pro's formula price by at most this many percent either way. */
+export const PRICE_ADJUST_MAX = 40;
+
+/** The pricing agent's suggestion for one pro on one spec. Stored as a percentage, so rate-card edits still apply. */
+export type PriceSuggestion = { providerId: number; adjustPct: number; reason: string };
+
+export const clampAdjust = (pct: number) => Math.min(PRICE_ADJUST_MAX, Math.max(-PRICE_ADJUST_MAX, Math.round(pct)));
+
+/** The formula price moved by the agent's adjustment (clamped here too), with the same ±15% range. */
+export function suggestedQuote(card: RateCard, spec: { severity: number; areaM2: number }, adjustPct = 0): Quote {
+  const base = quote(card, spec).price;
+  const price = base * (1 + clampAdjust(adjustPct) / 100);
+  return { price: round5(price), low: round5(price * (1 - PRICE_SPREAD)), high: round5(price * (1 + PRICE_SPREAD)) };
+}
+
+/** This pro's suggestion on a spec, if the pricing agent made one. */
+export const suggestionFor = (spec: { priceSuggestions?: PriceSuggestion[] | null }, providerId: number) =>
+  spec.priceSuggestions?.find((x) => x.providerId === providerId) ?? null;
+
 /** Confidence below this hands the scan to a human, with the spec attached. */
 export const HANDOFF_CONFIDENCE = 0.6;
 
@@ -74,6 +95,7 @@ export const SCAN_STATUSES = ["capturing", "clarifying", "spec_ready", "submitte
 export type ScanStatus = (typeof SCAN_STATUSES)[number];
 
 /**
+ * open         sent to every matching pro at once; collecting offers (Pro tab: New)
  * pending      homeowner booked, waiting for the pro (Pro tab: New)
  * handoff      low confidence; a human reviews the spec (Pro tab: Needs review)
  * virtual_call no pro in range; homeowner asked for a virtual call (Needs review)
@@ -84,17 +106,30 @@ export type ScanStatus = (typeof SCAN_STATUSES)[number];
  * declined     pro declined; homeowner can book the next pro
  * cancelled    homeowner cancelled
  */
-export const JOB_STATUSES = ["pending", "handoff", "virtual_call", "more_info", "accepted", "en_route", "done", "declined", "cancelled"] as const;
+export const JOB_STATUSES = ["open", "pending", "handoff", "virtual_call", "more_info", "accepted", "en_route", "done", "declined", "cancelled"] as const;
 export type ScopeJobStatus = (typeof JOB_STATUSES)[number];
 
 export const PRO_TABS = {
   // more_info stays in New (badged "Waiting for homeowner") until the homeowner replies.
-  new: ["pending", "more_info"],
+  new: ["open", "pending", "more_info"],
   review: ["handoff", "virtual_call"],
   active: ["accepted", "en_route"],
   done: ["done"],
 } as const satisfies Record<string, readonly ScopeJobStatus[]>;
 export type ProTab = keyof typeof PRO_TABS;
+
+/**
+ * active     waiting for the homeowner
+ * withdrawn  the pro took it back
+ * accepted   the homeowner picked it
+ * lost       the homeowner picked someone else (or cancelled)
+ * stale      the spec changed after it was sent; the pro should re-send
+ */
+export const OFFER_STATUSES = ["active", "withdrawn", "accepted", "lost", "stale"] as const;
+export type OfferStatus = (typeof OFFER_STATUSES)[number];
+
+/** Sanity bounds for a pro's offer. The rate card is only a suggestion. */
+export const OFFER_MAX_PRICE = 100000;
 
 export const ESTIMATE_LABEL = "Estimate — confirmed by provider";
 
@@ -111,7 +146,13 @@ export type ProviderMatch = {
   etaMinutes: number;
   quote: Quote;
   slots: Slot[];
+  /** The matching agent's one-line reason this pro fits the job (null without the agent). */
+  fitReason: string | null;
 };
+
+/** One pro in the matching agent's ranking for a spec. score 0-100; below FIT_MIN means a poor fit. */
+export type ProviderFit = { providerId: number; score: number; reason: string };
+export const FIT_MIN = 40;
 
 export type ScanPhotoInfo = {
   id: number;
@@ -140,7 +181,20 @@ export type JobSpecInfo = {
   createdAt: string;
 };
 
-export type MoreInfoRequest = { shotIds: string[]; questionIds: string[]; message: string | null };
+/** `providerId` is the pro who asked, when the job was open to several pros. */
+export type MoreInfoRequest = { shotIds: string[]; questionIds: string[]; message: string | null; providerId?: number | null };
+
+export type OfferInfo = {
+  id: number;
+  provider: { id: number; name: string; rating: number; ratingCount: number };
+  distanceKm: number;
+  etaMinutes: number;
+  price: number;
+  slot: string;
+  status: OfferStatus;
+  createdAt: string;
+  updatedAt: string;
+};
 
 export type ScopeJobInfo = {
   id: number;
@@ -183,6 +237,11 @@ export type ScanResponse = {
   job: ScopeJobInfo | null;
   /** Ranked providers for this spec (only while choosing / after a decline). */
   matches: ProviderMatch[];
+  /** Active offers while the job is open, cheapest first. */
+  offers: OfferInfo[];
+  /** How many pros the open request went to, and how many passed. */
+  invitedCount: number;
+  passedCount: number;
 };
 
 export type ShotResult = { ok: boolean; message: string; remainingShots: string[]; status: ScanStatus };
@@ -200,6 +259,10 @@ export type HomeRecordItem = {
   price: number | null;
   /** The pro's "ask for more", while the job is more_info. */
   request: MoreInfoRequest | null;
+  /** Active offers while the job is open. */
+  offerCount: number;
+  /** Cheapest active offer, for the notification text. */
+  bestOffer: { price: number; providerName: string } | null;
   /** Signed link to the first usable photo, for a thumbnail. */
   photoSrc: string | null;
   needsAction: boolean;
@@ -221,8 +284,14 @@ export type ProQueueCard = {
   severity: number;
   areaM2: number;
   confidence: number;
+  /** Suggested price for this pro: rate card formula, adjusted by the pricing agent. */
   quote: Quote;
+  /** The pricing agent's one-line reason (null: plain formula price). */
+  priceReason: string | null;
   distanceKm: number;
+  /** This pro's offer on an open job (any status). */
+  myOffer: OfferInfo | null;
+  invitedCount: number;
   createdAt: string;
   updatedAt: string;
 };
@@ -237,9 +306,88 @@ export type ProProvider = {
   radiusKm: number;
   rating: number;
   ratingCount: number;
+  /** Written by the profile interview's pricing step (read-only here). */
   rateCard: RateCard;
   offersVirtual: boolean;
+  /** What the pro specializes in. The matching agent reads it. */
+  description: string | null;
+  profileStatus: ProfileStatus;
+  /** Structured facts from the profile interview, once complete. */
+  profileFacts: ProfileFacts | null;
 };
+
+export const DESCRIPTION_MAX = 1000;
+
+// ---------- Pro profile interview ----------
+
+/** One question the profile agent asks. The pro taps one (or several, if `multi`) options and can add a note. */
+export const profileQuestionSchema = z.object({
+  id: z.string(),
+  q: z.string(),
+  options: z.array(z.string()),
+  multi: z.boolean(),
+});
+export type ProfileQuestion = z.infer<typeof profileQuestionSchema>;
+export type ProfileTurn = ProfileQuestion & { answer: string[]; note: string | null };
+
+export const profileFactsSchema = z.object({
+  specialties: z.array(z.string()),
+  jobSizes: z.string(),
+  availability: z.string(),
+  notes: z.string(),
+});
+export type ProfileFacts = z.infer<typeof profileFactsSchema>;
+
+/**
+ * interview  the agent is asking questions (`pending` is the open one)
+ * pricing    questions done; the pro enters their prices (no AI)
+ * complete   facts, description and rate card are saved
+ */
+export type ProProfile = {
+  stage: "interview" | "pricing" | "complete";
+  turns: ProfileTurn[];
+  pending: ProfileQuestion | null;
+  facts: ProfileFacts | null;
+  /** Agent-written summary, saved as the description when the pro finishes. */
+  draftDescription: string | null;
+  completedAt: string | null;
+};
+
+export type ProfileStatus = "not_started" | "summary_only" | "in_progress" | "complete";
+
+/** GET /api/pro/profile, and what each interview step returns. */
+export type ProfileView = { status: ProfileStatus; profile: ProProfile | null; description: string | null; website: string | null; rateCard: RateCard; pricing: ProfilePricing };
+
+export function profileStatus(p: { profile: ProProfile | null; description: string | null }): ProfileStatus {
+  if (p.profile?.stage === "complete") return "complete";
+  if (p.profile) return "in_progress";
+  return p.description?.trim() ? "summary_only" : "not_started";
+}
+
+/** The interview asks at least this many questions and never more than the cap. */
+export const PROFILE_MIN_QUESTIONS = 4;
+export const PROFILE_MAX_QUESTIONS = 8;
+
+/** What the pro enters in the pricing step. Turned into the rate card in code; the pricing agent only adjusts within ±PRICE_ADJUST_MAX%. */
+export const profilePricingSchema = z.object({
+  callOut: z.number({ error: "Enter your call-out fee." }).min(0, "Prices can't be negative.").max(100000),
+  perM2: z.number({ error: "Enter your price per m²." }).min(0, "Prices can't be negative.").max(100000),
+  severePct: z.number({ error: "Enter the extra for severe jobs." }).min(0, "The extra can't be negative.").max(1000),
+});
+export type ProfilePricing = z.infer<typeof profilePricingSchema>;
+
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
+/** severity 1-2 at the base price, then ramping up to +severePct% at severity 5. */
+export function rateCardFromPricing(p: ProfilePricing): RateCard {
+  const s = p.severePct / 100;
+  return { base: p.callOut, per_m2: p.perM2, severity_multiplier: [1, 1, round2(1 + s * 0.4), round2(1 + s * 0.7), round2(1 + s)] };
+}
+
+/** The pricing step's prefill from an existing rate card. */
+export function pricingFromRateCard(c: RateCard): ProfilePricing {
+  return { callOut: c.base, perM2: c.per_m2, severePct: Math.round(((c.severity_multiplier[4] ?? 1) - 1) * 100) };
+}
 
 export type ProJobDetail = {
   job: ScopeJobInfo;
@@ -248,13 +396,20 @@ export type ProJobDetail = {
   home: { address: string; lat: number; lng: number };
   photos: ScanPhotoInfo[];
   spec: JobSpecInfo;
-  /** Priced with this provider's current rate card. */
+  /** Suggested price for this pro: current rate card formula, adjusted by the pricing agent. */
   quote: Quote;
+  /** The pricing agent's one-line reason (null: plain formula price). */
+  priceReason: string | null;
   slots: Slot[];
+  /** This pro's offer on an open job (any status). */
+  myOffer: OfferInfo | null;
+  invitedCount: number;
   /** Readable answers: question text → answer. */
   answers: { id: string; q: string; answer: string }[];
   /** The event in this provider's Google Calendar, if they're connected and accepted it. */
   calendarLink: string | null;
+  /** Why the matching agent picked this pro for the job, if it ranked them. */
+  fitReason: string | null;
 };
 
 // ---------- Small helpers ----------
@@ -262,6 +417,7 @@ export type ProJobDetail = {
 export const SEVERITY_LABELS = ["", "Minor", "Light", "Moderate", "Significant", "Severe"];
 
 export const JOB_STATUS_LABELS: Record<ScopeJobStatus, string> = {
+  open: "Collecting offers",
   pending: "Waiting for the pro",
   handoff: "Specialist reviewing",
   virtual_call: "Virtual call requested",
@@ -276,7 +432,7 @@ export const JOB_STATUS_LABELS: Record<ScopeJobStatus, string> = {
 export const SCAN_STATUS_LABELS: Record<ScanStatus, string> = {
   capturing: "Scan in progress",
   clarifying: "A few questions left",
-  spec_ready: "Ready to book",
+  spec_ready: "Ready to request",
   submitted: "Submitted",
   cancelled: "Cancelled",
 };

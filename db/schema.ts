@@ -1,7 +1,7 @@
-import { sqliteTable, text, integer, real } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, real, unique } from "drizzle-orm/sqlite-core";
 import type { JobReport } from "@/shared/types";
-import type { MoreInfoRequest, RateCard } from "../shared/scope";
-import { JOB_STATUSES as SCOPE_JOB_STATUSES, SCAN_STATUSES } from "../shared/scope";
+import type { MoreInfoRequest, PriceSuggestion, ProProfile, ProviderFit, RateCard } from "../shared/scope";
+import { JOB_STATUSES as SCOPE_JOB_STATUSES, OFFER_STATUSES, SCAN_STATUSES } from "../shared/scope";
 
 const now = () => new Date();
 
@@ -135,7 +135,7 @@ export const homes = sqliteTable("homes", {
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().$defaultFn(now),
 });
 
-/** A provider company. The /pro dashboard picks one with ?provider=<id> (no auth). */
+/** A provider: a company or an individual pro. The /pro dashboard picks one with ?provider=<id> (no auth). */
 export const providers = sqliteTable("providers", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   name: text("name").notNull().unique(),
@@ -147,6 +147,13 @@ export const providers = sqliteTable("providers", {
   ratingCount: integer("rating_count").notNull().default(0),
   rateCard: text("rate_card", { mode: "json" }).$type<RateCard>().notNull(),
   phone: text("phone"),
+  /** What the pro specializes in, written on /pro. The matching agent reads it. */
+  description: text("description"),
+  /** The pro's website, entered on /pro, and a plain-text excerpt of its homepage the profile agent reads. */
+  website: text("website"),
+  websiteText: text("website_text"),
+  /** The profile interview on /pro: questions, answers and the facts the matching agent reads. Null until started. */
+  profile: text("profile", { mode: "json" }).$type<ProProfile>(),
   /** Offers virtual calls when no on-site pro is in range. */
   offersVirtual: integer("offers_virtual", { mode: "boolean" }).notNull().default(false),
   /** Google Calendar connection from /pro: OAuth refresh token and the calendar's id (an email). */
@@ -205,10 +212,14 @@ export const jobSpecs = sqliteTable("job_specs", {
   severity: integer("severity").notNull(),
   areaM2: real("area_m2").notNull(),
   confidence: real("confidence").notNull(),
-  /** Priced with the top-matched provider's rate card at generation time. */
+  /** Suggested range for the top-matched provider at generation time (rate card + pricing agent). */
   priceLow: real("price_low"),
   priceHigh: real("price_high"),
   pricedForProviderId: integer("priced_for_provider_id").references(() => providers.id),
+  /** The matching agent's ranking of in-range pros for this spec, best first. Null: default order. */
+  fit: text("fit", { mode: "json" }).$type<ProviderFit[]>(),
+  /** The pricing agent's per-pro adjustment to the rate-card price for this spec. Null: plain formula. */
+  priceSuggestions: text("price_suggestions", { mode: "json" }).$type<PriceSuggestion[]>(),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().$defaultFn(now),
 });
 
@@ -232,11 +243,33 @@ export const scopeJobs = sqliteTable("scope_jobs", {
   price: real("price"),
   request: text("request", { mode: "json" }).$type<MoreInfoRequest>(),
   declinedBy: text("declined_by", { mode: "json" }).$type<number[]>().notNull().default([]),
+  /** Pros the request was sent to when it opened for offers. */
+  invited: text("invited", { mode: "json" }).$type<number[]>().notNull().default([]),
   /** Link to the event in the pro's Google Calendar, once accepted by a connected pro. */
   calendarLink: text("calendar_link"),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().$defaultFn(now),
   updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().$defaultFn(now),
 });
+
+/** A pro's price + time for an open job. One per pro per job; the homeowner accepts one. */
+export const offers = sqliteTable(
+  "offers",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    jobId: integer("job_id")
+      .notNull()
+      .references(() => scopeJobs.id),
+    providerId: integer("provider_id")
+      .notNull()
+      .references(() => providers.id),
+    price: integer("price").notNull(),
+    slot: integer("slot", { mode: "timestamp" }).notNull(),
+    status: text("status", { enum: OFFER_STATUSES }).notNull().default("active"),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull().$defaultFn(now),
+    updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().$defaultFn(now),
+  },
+  (t) => [unique().on(t.jobId, t.providerId)],
+);
 
 export const ratings = sqliteTable("ratings", {
   id: integer("id").primaryKey({ autoIncrement: true }),
@@ -254,3 +287,4 @@ export type Scan = typeof scans.$inferSelect;
 export type ScanPhoto = typeof scanPhotos.$inferSelect;
 export type JobSpec = typeof jobSpecs.$inferSelect;
 export type ScopeJob = typeof scopeJobs.$inferSelect;
+export type Offer = typeof offers.$inferSelect;

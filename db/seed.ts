@@ -65,12 +65,15 @@ const CENTER = { lat: Number(process.env.DEMO_LAT) || 45.5019, lng: Number(proce
 const at = (dLat: number, dLng: number) => ({ lat: CENTER.lat + dLat, lng: CENTER.lng + dLng });
 
 const scopeProviders = [
-  { name: "Mold Busters", trades: ["mold"], ...at(0.05, -0.03), radiusKm: 50, rating: 4.9, ratingCount: 212, phone: "555-0150", offersVirtual: true, rateCard: { base: 150, per_m2: 40, severity_multiplier: [1, 1, 1.2, 1.5, 2] } },
-  { name: "ClearSpore Remediation", trades: ["mold"], ...at(-0.02, 0.02), radiusKm: 15, rating: 4.6, ratingCount: 48, phone: "555-0151", offersVirtual: false, rateCard: { base: 120, per_m2: 35, severity_multiplier: [1, 1.1, 1.3, 1.6, 2.1] } },
+  { name: "Mold Busters", trades: ["mold"], ...at(0.05, -0.03), radiusKm: 50, rating: 4.9, ratingCount: 212, phone: "555-0150", offersVirtual: true, rateCard: { base: 150, per_m2: 40, severity_multiplier: [1, 1, 1.2, 1.5, 2] }, description: "Full-service mold remediation company. Large and severe jobs: whole basements, attics, crawl spaces and water-damaged drywall, with containment and air scrubbers. Also runs virtual assessments." },
+  { name: "ClearSpore Remediation", trades: ["mold"], ...at(-0.02, 0.02), radiusKm: 15, rating: 4.6, ratingCount: 48, phone: "555-0151", offersVirtual: false, rateCard: { base: 120, per_m2: 35, severity_multiplier: [1, 1.1, 1.3, 1.6, 2.1] }, description: "Small downtown team focused on bathrooms and kitchens: shower and ceiling mold, window sills, caulking and ventilation fixes. Best for light to moderate jobs." },
   // Out of range on purpose: shows the distance filter.
-  { name: "Northshore Mold Co", trades: ["mold"], ...at(2.5, 0), radiusKm: 40, rating: 4.8, ratingCount: 90, phone: "555-0152", offersVirtual: false, rateCard: { base: 140, per_m2: 38, severity_multiplier: [1, 1, 1.2, 1.5, 2] } },
-  { name: "Clearwater Plumbing", trades: ["plumbing_sink"], ...at(0.03, 0.04), radiusKm: 25, rating: 4.8, ratingCount: 133, phone: "555-0160", offersVirtual: true, rateCard: { base: 120, per_m2: 15, severity_multiplier: [1, 1.1, 1.3, 1.6, 2] } },
-  { name: "Pipeline Pros", trades: ["plumbing_sink"], ...at(-0.06, -0.05), radiusKm: 20, rating: 4.5, ratingCount: 61, phone: "555-0161", offersVirtual: false, rateCard: { base: 95, per_m2: 10, severity_multiplier: [1, 1.15, 1.35, 1.7, 2.2] } },
+  { name: "Northshore Mold Co", trades: ["mold"], ...at(2.5, 0), radiusKm: 40, rating: 4.8, ratingCount: 90, phone: "555-0152", offersVirtual: false, rateCard: { base: 140, per_m2: 38, severity_multiplier: [1, 1, 1.2, 1.5, 2] }, description: "Mold inspection and remediation for North Shore homes and cottages, including crawl spaces and seasonal properties." },
+  { name: "Clearwater Plumbing", trades: ["plumbing_sink"], ...at(0.03, 0.04), radiusKm: 25, rating: 4.8, ratingCount: 133, phone: "555-0160", offersVirtual: true, rateCard: { base: 120, per_m2: 15, severity_multiplier: [1, 1.1, 1.3, 1.6, 2] }, description: "Residential plumbers for kitchens and bathrooms: leaking faucets, sink drains, P-traps, garbage disposals and under-sink water damage. Same-day emergency leaks." },
+  { name: "Pipeline Pros", trades: ["plumbing_sink"], ...at(-0.06, -0.05), radiusKm: 20, rating: 4.5, ratingCount: 61, phone: "555-0161", offersVirtual: false, rateCard: { base: 95, per_m2: 10, severity_multiplier: [1, 1.15, 1.35, 1.7, 2.2] }, description: "Drain and pipe specialists: clogged and slow drains, drain cleaning, pipe replacement and re-piping. Not focused on fixtures." },
+  // An individual, not a company: shows solo pros can sign up too.
+  // Out of the demo home's range so the e2e match lists stay the same.
+  { name: "Justin Fan", trades: ["mold", "plumbing_sink"], ...at(-1.5, 0.5), radiusKm: 20, rating: 5, ratingCount: 7, phone: "555-0170", offersVirtual: false, rateCard: { base: 90, per_m2: 30, severity_multiplier: [1, 1.1, 1.3, 1.6, 2] }, description: "Independent handyman-plumber and mold tech. Small, quick jobs: drippy faucets, sink leaks and small patches of bathroom mold. Flexible evening visits." },
 ];
 
 function seedScope() {
@@ -78,8 +81,8 @@ function seedScope() {
   for (const p of scopeProviders) {
     const existing = db.select().from(schema.providers).where(eq(schema.providers.name, p.name)).get();
     if (existing) {
-      // Only move it; keep rate card or rating changes made in /pro.
-      db.update(schema.providers).set({ lat: p.lat, lng: p.lng, radiusKm: p.radiusKm }).where(eq(schema.providers.id, existing.id)).run();
+      // Only move it (and fill in a missing description); keep rate card, rating and profile changes made in /pro.
+      db.update(schema.providers).set({ lat: p.lat, lng: p.lng, radiusKm: p.radiusKm, description: existing.description ?? p.description }).where(eq(schema.providers.id, existing.id)).run();
     } else {
       db.insert(schema.providers).values(p).run();
     }

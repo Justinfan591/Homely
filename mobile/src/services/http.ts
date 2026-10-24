@@ -1,9 +1,9 @@
 // ScopeApi over HTTP: the real backend (Next.js API in the repo root) via the shared typed client.
 // No React Native imports, so scripts/e2e.ts can drive it from Node. Relative imports for the same reason.
 import { createScopeClient, ScopeApiError, type PhotoInput } from "../../../shared/scope-client";
-import type { HomeRecordItem, ProviderMatch, ScanResponse, ScopeJobStatus, Slot as ApiSlot } from "../../../shared/scope";
+import type { HomeRecordItem, OfferInfo, ProviderMatch, ScanResponse, ScopeJobStatus, Slot as ApiSlot } from "../../../shared/scope";
 import { slotLabel } from "../domain/format";
-import type { Job, JobSpec, JobStatus, MatchOption, RecordItem, RecordStatus, Scan, Slot, SpecOutcome } from "../domain/types";
+import type { Job, JobSpec, JobStatus, MatchOption, Offer, RecordItem, RecordStatus, Scan, Slot, SpecOutcome } from "../domain/types";
 import { ApiError, type ScopeApi } from "./api";
 
 export type HttpApiOptions = {
@@ -100,7 +100,16 @@ export function createHttpApi(opts: HttpApiOptions): ScopeApi {
     slots: m.slots.map(slot),
   });
 
+  const toOffer = (o: OfferInfo): Offer => ({
+    id: String(o.id),
+    provider: { id: String(o.provider.id), name: o.provider.name, rating: o.provider.rating, reviews: o.provider.ratingCount, etaMinutes: o.etaMinutes },
+    distanceKm: o.distanceKm,
+    price: o.price,
+    slot: slot(o.slot),
+  });
+
   const JOB_STATUS: Record<ScopeJobStatus, JobStatus> = {
+    open: "collecting",
     pending: "pending",
     virtual_call: "pending",
     handoff: "handoff",
@@ -124,7 +133,7 @@ export function createHttpApi(opts: HttpApiOptions): ScopeApi {
       specId: String(r.spec?.id ?? ""),
       scanId: String(r.scan.id),
       homeId: String(r.home.id),
-      providerName: j.provider?.name ?? (virtual ? "Our virtual team" : "A Scope specialist"),
+      providerName: j.provider?.name ?? (virtual ? "Our virtual team" : j.status === "open" ? "Pros nearby" : j.status === "more_info" ? "A pro" : "A Scope specialist"),
       providerRating: j.provider?.rating ?? null,
       status: JOB_STATUS[j.status],
       slot: when ? slot(when) : null,
@@ -134,7 +143,10 @@ export function createHttpApi(opts: HttpApiOptions): ScopeApi {
       rating: j.rating,
       createdAt: j.createdAt,
       virtual,
-      followUp: j.status === "more_info" && j.request ? { provider: j.provider?.name ?? "Your pro", message: j.request.message ?? "", questionIds: j.request.questionIds } : undefined,
+      followUp: j.status === "more_info" && j.request ? { provider: j.provider?.name ?? "A pro", message: j.request.message ?? "", questionIds: j.request.questionIds } : undefined,
+      offers: r.offers.map(toOffer),
+      invitedCount: r.invitedCount,
+      passedCount: r.passedCount,
     };
   }
 
@@ -142,8 +154,10 @@ export function createHttpApi(opts: HttpApiOptions): ScopeApi {
     const spec = toSpec(r);
     const job = r.job;
     if (job?.status === "handoff") return { kind: "handoff", spec };
+    // Every pro passed on the open request: offer the virtual call.
+    if (job?.status === "open" && r.invitedCount > 0 && r.passedCount >= r.invitedCount) return { kind: "no_provider", spec };
     if (job && job.status !== "declined") return { kind: "submitted", spec, jobId: String(r.scan.id) };
-    // Choosing a pro: first time, or again after a decline (the decliner is already excluded).
+    // Ready to request offers: first time, or again after a decline (the decliner is already excluded).
     return r.matches.length ? { kind: "match", spec, options: r.matches.map(toOption) } : { kind: "no_provider", spec };
   }
 
@@ -155,6 +169,8 @@ export function createHttpApi(opts: HttpApiOptions): ScopeApi {
         return { status: "in_progress", href: i.scanStatus === "clarifying" ? `/clarify/${id}` : i.scanStatus === "spec_ready" ? `/spec/${id}` : `/scan/${id}` };
       case "more_info":
         return { status: "needs_info", href: `/scan/${id}` };
+      case "open":
+        return { status: i.offerCount ? "offers" : "awaiting", href: `/track/${id}` };
       case "pending":
       case "virtual_call":
         return { status: "awaiting", href: `/track/${id}` };
@@ -188,6 +204,8 @@ export function createHttpApi(opts: HttpApiOptions): ScopeApi {
             photoUri: i.photoSrc ? abs(i.photoSrc) : null,
             href,
             followUp: i.request ? { provider: i.providerName ?? "Your pro", message: i.request.message ?? "", questionIds: i.request.questionIds } : undefined,
+            offerCount: i.offerCount,
+            bestOffer: i.bestOffer ? { price: i.bestOffer.price, provider: i.bestOffer.providerName } : null,
           };
         }),
       ),
@@ -245,7 +263,9 @@ export function createHttpApi(opts: HttpApiOptions): ScopeApi {
         return toSpec(await scan(scanId));
       }),
 
-    bookJob: (scanId, providerId, slotId) => run(async () => toJob(await h.book(Number(scanId), Number(providerId), slotId))),
+    requestOffers: (scanId, slotId) => run(async () => toJob(await h.requestOffers(Number(scanId), slotId))),
+
+    acceptOffer: (jobId, offerId) => run(async () => toJob(await h.acceptOffer(Number(jobId), Number(offerId)))),
 
     bookVirtualCall: (scanId, slotId) => run(async () => toJob(await h.requestVirtualCall(Number(scanId), slotId))),
 

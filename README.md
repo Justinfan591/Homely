@@ -4,8 +4,8 @@ Molsters runs **Scope**: point your phone at a home problem, get it fixed.
 
 1. The homeowner taps **Scan a problem** and the app guides the photos one shot at a time. Claude checks each one.
 2. A few tap-to-answer questions, then Claude writes a **JobSpec** (severity, area, confidence). It never prices.
-3. The price comes from the provider's rate card (±15%), and the best-matched pros nearby are offered.
-4. The homeowner books a pro and asks for a time. The pro accepts on the **`/pro` dashboard** (laptop), confirming the time and price.
+3. A typical price comes from the pros' own prices (set in their profile, ±15%), and the request goes out to **every matching pro nearby at once**.
+4. Each pro sends their own offer (any price + a time slot) from the **`/pro` dashboard** (laptop). Offers pop up on the phone, and the homeowner accepts one, Uber-style. The others close.
 5. The phone tracks the job (booked → on the way → done) and the homeowner rates it.
 
 It has four parts:
@@ -30,14 +30,14 @@ The Scope flow from `SOON26.md`, as the server implements it. The app in `mobile
 1. **Home**: a big **Scan a problem** button, with the Home Record (every scan and job for this home) below it.
 2. **Scan**: full-screen camera, one shot at a time from the trade template. Claude (`claude-sonnet-5-5`, JSON-only, validated with zod) checks each photo. Blurry, dark, wrong subject, or a face or document in frame means a retake. Optional shots can be skipped with a reason ("There's no wall next to it").
 3. **Clarify**: the template's questions as tap chips, plus an optional note.
-4. **Spec**: Claude writes the JobSpec (title, summary, severity 1-5, area m², confidence 0-1, template fields). It never prices. The price is `(base + per_m2 × area) × severity_multiplier[severity-1]`, ±15%, from the provider's rate card, labelled "Estimate — confirmed by provider".
-5. **Matching**: providers for the trade within their radius, best rating first, then shortest ETA. **Book [Provider] · [time]** sends the spec to that pro with the time the homeowner asked for. The pro confirms that time or picks another.
+4. **Spec**: Claude writes the JobSpec (title, summary, severity 1-5, area m², confidence 0-1, template fields). It never prices. The price is `(base + per_m2 × area) × severity_multiplier[severity-1]`, ±15%, from the provider's rate card (built from the prices they enter at the end of their profile interview), labelled "Estimate — confirmed by provider".
+5. **Matching**: providers for the trade within their radius, best rating first, then shortest ETA. **Get offers from N pros** sends the spec to all of them at once, with an optional preferred time. Each pro sends a price (pre-filled from their profile pricing, but any price) and a slot; the homeowner accepts one offer and every other offer closes. Pros can update or withdraw an offer, or pass.
 6. **Track**: polls every 2 s. Waiting → booked (slot + confirmed price) → on the way (ETA countdown) → done → 5-star rating, which updates the provider's rating.
-7. **Fallbacks**: confidence under 0.6 goes straight to human review with the spec attached. If no provider is in range, the homeowner can book a virtual call (Mold Busters for mold). If a pro declines, the next pro is offered.
+7. **Fallbacks**: confidence under 0.6 goes straight to human review with the spec attached. If no provider is in range, the homeowner can book a virtual call (Mold Busters for mold). If every pro passes, the homeowner is offered a virtual call.
 
 **Adding a trade means adding a file** to `templates/` (`mold.json` and `plumbing_sink.json` ship). The format is checked by `templateSchema` in `shared/scope.ts`, and templates are re-read on every request in dev.
 
-**Demo data**: `npm run db:seed` creates five providers around `DEMO_LAT`/`DEMO_LNG` (default: downtown Montreal) and a "Demo house" for `customer@demo.com`. Northshore Mold Co is deliberately out of range. To move the demo to the venue, set both variables and run the seed again. Rate cards and ratings are kept. Other homeowner accounts set their home with `PUT /api/home`.
+**Demo data**: `npm run db:seed` creates five providers around `DEMO_LAT`/`DEMO_LNG` (default: downtown Montreal) and a "Demo house" for `customer@demo.com`. Northshore Mold Co is deliberately out of range. To move the demo to the venue, set both variables and run the seed again. Rate cards, profiles and ratings are kept. Other homeowner accounts set their home with `PUT /api/home`.
 
 ### Connecting a UI
 
@@ -73,8 +73,8 @@ Every action returns the full `ScanResponse` unless noted. Render the screen fro
 | Pick trade | | `GET /api/templates`, then `POST /api/scans { trade }` → `{ id }` |
 | Scan | `scan.status = capturing` | Next shot = `remainingShots[0]` (prompt in `template.required_shots`). `POST /api/scans/:id/shots` (form: `shotId`, `photo`) → `ShotResult`; `ok:false` means show `message` and retake. Optional shots: `POST /skip { shotId }` → `ShotResult`. |
 | Clarify | `clarifying` | `POST /finish { answers: { [questionId]: option }, notes? }`. During an ask-for-more, only `scan.focus.questionIds` are asked. |
-| Spec | `spec_ready`, or `job.status = declined` | `spec`, `matches[]` (ranked, each with `quote` and `slots`). `POST /book { providerId, slot? }` (`slot` = a `slots[].startsAt`, the requested time), `POST /human`. If `matches` is empty: `GET /api/slots`, then `POST /virtual-call { slot? }`. |
-| Track | `submitted` | `job.status`: `pending` (`requestedSlot`) · `handoff` · `virtual_call` · `accepted` (slot, price) · `en_route` (`eta`) · `done` → `POST /rate { stars }` · `more_info` → `POST /reopen`, then back to Scan/Clarify. `POST /cancel` any time before accepted. |
+| Spec | `spec_ready`, or `job.status = declined` | `spec`, `matches[]` (the pros the request will go to, each with `quote` and `slots`). `POST /request { slot? }` (`slot` = a `slots[].startsAt`, the preferred time), `POST /human`. If `matches` is empty: `GET /api/slots`, then `POST /virtual-call { slot? }`. |
+| Track | `submitted` | `job.status`: `open` (collecting offers: `offers[]` cheapest first, `invitedCount`, `passedCount`; `POST /offers/:offerId/accept`; if everyone passed, `POST /virtual-call`) · `pending` (`requestedSlot`) · `handoff` · `virtual_call` · `accepted` (slot, price) · `en_route` (`eta`) · `done` → `POST /rate { stars }` · `more_info` → `POST /reopen`, then back to Scan/Clarify. `POST /cancel` any time before accepted. |
 
 All paths are under `/api/scans/:id`. `shared/scope.ts` has the labels (`JOB_STATUS_LABELS`, `ESTIMATE_LABEL`, `slotLabel`, `priceRange`).
 
@@ -86,37 +86,38 @@ npm run test:e2e      # terminal 2: the API, every flow (E2E_BASE_URL=http://loc
 npm run e2e           # terminal 2: the phone app's client + the /pro dashboard together
 ```
 
-`npm run e2e` runs the app's real API client (`mobile/src/services/http.ts`) as the homeowner and submits the `/pro` page's forms as the provider. It covers: a retake, a skip, booking with a requested time, ask for more (a shot and a question), accept (including an out-of-range price), en route, done, rating, decline → next pro → virtual call, talk to a person, cancel, the second trade and a rate-card change. It deletes its scans afterwards.
+`npm run e2e` runs the app's real API client (`mobile/src/services/http.ts`) as the homeowner and submits the `/pro` page's forms as the provider. It covers: a retake, a skip, requesting offers with a preferred time, ask for more (a shot and a question), two pros' offers (one far outside the rate card), accepting one, en route, done, rating, everyone passes → virtual call, talk to a person, cancel, the second trade, and the profile interview ending in a price change. It deletes its scans afterwards.
 
 `npm run test:e2e` drives every flow through the typed client:
 
-- happy path with a retake, skip, booking, accept, en route, done and rating;
-- ask for more;
-- decline and rebook;
+- happy path with a retake, skip, request, offers (send, update, withdraw), accept, en route, done and rating;
+- ask for more on an open request (offers go stale, then re-sent);
+- pass, and everyone passing;
 - human and low-confidence handoff;
 - no pro in range, leading to a virtual call;
-- a rate-card change;
+- the profile interview (questions, skip, pricing step) re-pricing the queue;
 - a cancel;
 - the second trade;
 - access control and CORS.
 
-It signs up a throwaway homeowner, then deletes that data and restores ratings and rate cards. Pass `-- --keep` to leave the data so you can look at it in a UI. With real Claude, AI-dependent checks become warnings (the test photos are drawings, so Claude often scores them below 0.6 and hands off).
+It signs up a throwaway homeowner, then deletes that data and restores ratings, rate cards and profiles. Pass `-- --keep` to leave the data so you can look at it in a UI. With real Claude, AI-dependent checks become warnings (the test photos are drawings, so Claude often scores them below 0.6 and hands off).
 
 ### Pro side integration (`/pro`, no auth)
 
-The dashboard picks its provider with `?provider=<id>` (the seed prints the ids; Mold Busters is `1`). Every endpoint below takes that query parameter. Response types are in `shared/scope.ts` (`ProQueueResponse`, `ProJobDetail`, `ProProvider`, `RateCard`).
+The dashboard picks its provider with `?provider=<id>` (the seed prints the ids; Mold Busters is `1`). Every endpoint below takes that query parameter. Response types are in `shared/scope.ts` (`ProQueueResponse`, `ProJobDetail`, `ProProvider`, `ProfileView`, `RateCard`).
 
 | Method | Path | Body | Does |
 | --- | --- | --- | --- |
 | GET | `/api/pro/providers` | | All providers (for a picker) |
-| GET | `/api/pro/queue` | | Tabs `new` (pending, and more_info while the homeowner answers) · `review` (handoff, virtual_call) · `active` (accepted, en_route) · `done`. Each card has trade, title, severity, area, confidence, distance, age and a quote **priced with this provider's current rate card**. Poll every 2 s. |
+| GET | `/api/pro/queue` | | Tabs `new` (open requests this pro was sent, with `myOffer`; pending; and more_info while the homeowner answers) · `review` (handoff, virtual_call) · `active` (accepted, en_route) · `done`. Each card has trade, title, severity, area, confidence, distance, age and a quote **priced with this provider's current profile pricing**. Poll every 2 s. |
 | GET | `/api/pro/jobs/:id` | | Spec detail: photos labelled by shot, summary, fields, answers, notes, quote, and time slots (the homeowner's requested time first, `id: "requested"`). The exact address appears once the job is this provider's. |
-| POST | `/api/pro/jobs/:id/accept` | `{ slot: ISO, price }` | Price must be inside the quote range. → `accepted`; the phone shows the booking. |
+| POST / DELETE | `/api/pro/jobs/:id/offer` | `{ slot: ISO, price }` | Open requests: send or update this pro's offer (any price $1–$100,000; `quote` is a suggestion). `DELETE` withdraws it. The phone shows it right away. |
+| POST | `/api/pro/jobs/:id/accept` | `{ slot: ISO, price }` | Pending, handoff and virtual-call jobs only (not open requests). → `accepted`; the phone shows the booking. |
 | POST | `/api/pro/jobs/:id/ask-more` | `{ shotIds, questionIds, message? }` | → `more_info`. The phone rescans only those items; the job then returns to `new` with a new spec version. |
-| POST | `/api/pro/jobs/:id/decline` | | → `declined`; the phone offers the next pro or a virtual call. |
+| POST | `/api/pro/jobs/:id/decline` | | Open request: pass (withdraws any offer; returns `{ passed: true }`, it leaves your queue). Pending/virtual call: → `declined`. |
 | POST | `/api/pro/jobs/:id/virtual-call` | | Needs review → route to a virtual call. |
 | POST | `/api/pro/jobs/:id/status` | `{ to: "en_route" \| "done" }` | Active-job stepper. `en_route` sets the ETA from distance. |
-| GET / PUT | `/api/pro/rate-card` | `{ base, per_m2, severity_multiplier: [5 numbers] }` | New quotes use it immediately. |
+| GET / POST | `/api/pro/profile` | `{ action: "start" \| "retry" \| "skip" }`, `{ action: "answer", answer: string[], note? }`, `{ action: "pricing", pricing: { callOut, perM2, severePct } }`, `{ action: "description", description }` | The profile interview (`lib/scope/profile.ts`): Claude asks 4-8 tap-to-answer questions, then writes facts and a summary the matching agent reads. `pricing` finishes it and becomes the rate card (`rateCardFromPricing`); new quotes use it immediately. |
 | GET | `photos[].src` | | Photo bytes. `src` is a signed link that works on its own for 24 h, so put it straight in `<img src>` (prefix the API origin if the UI is on another origin). `photos[].url?provider=<id>` also works. |
 
 Actions return the updated `ProJobDetail`. Errors are `{ error }` with 400/404/409. Server logic lives in `lib/scope/` (`pro.ts` for these endpoints).
@@ -224,10 +225,10 @@ Open <http://localhost:3000/pro> and pick a provider, or go straight to `http://
 | Tab | What it does |
 | --- | --- |
 | New / Needs review / Active / Done | The provider's queue: trade, severity, area, price range, distance, confidence and age. *Needs review* holds handoffs (low confidence, or the homeowner asked for a person) and virtual calls. Jobs waiting on the homeowner stay in *New*, badged. |
-| Spec (click a card) | Photos by shot, AI summary, extracted fields, answers, notes and the price from your rate card. **Accept** (the homeowner's requested time is pre-selected; price within ±15%), **Ask for more** (pick template shots and questions, or write a request; the homeowner's phone shows a notification), **Decline**. Handoffs can be routed to a virtual call. |
+| Spec (click a card) | Photos by shot, AI summary, extracted fields, answers, notes and the price from your profile pricing. Open requests: **Send offer** (the homeowner's preferred time is pre-selected; price pre-filled from your profile pricing, any amount allowed), **Withdraw**, **Pass**. Handoffs and virtual calls: **Accept**. **Ask for more** (pick template shots and questions, or write a request; the homeowner's phone shows a notification), **Decline**. Handoffs can be routed to a virtual call. |
 | Active job | Status stepper and the visit in **Google Calendar**: added automatically if you connected it, otherwise an **Add to Google Calendar** link. Advancing the status updates the homeowner's screen. |
 | 📅 Connect Google Calendar (top right) | Connect the provider's Google account once; every job they accept from then on becomes an event in their calendar. Needs the setup below. |
-| Rate card | `base`, `per_m2` and the severity multipliers. Saving re-prices every spec. |
+| Profile | A short AI interview: one tap-to-answer question at a time (with an optional note), adapted to the pro's trades and earlier answers, 4-8 questions. It writes structured facts (specialties, job sizes, availability) and a summary the matching agent uses to route requests, then asks for prices (call-out fee, per m², extra for severe jobs), which set the suggested price on every spec. Until it's done, every view shows a **Finish profile** banner. |
 
 The page refreshes every 3 seconds.
 
