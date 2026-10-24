@@ -27,8 +27,14 @@ export type SessionUser = { id: number; name: string; email: string; role: "cust
 export type AuthResponse = { token: string; user: SessionUser };
 export type HealthResponse = { ok: true; ai: "claude" | "fake" | "missing_key"; trades: string[] };
 
-/** A photo to upload: a Blob/File in the browser or Node, or `{ uri, name, type }` in React Native. */
-export type PhotoInput = Blob | { uri: string; name: string; type: string };
+/**
+ * A photo to upload: a Blob/File in the browser or Node; in React Native, `{ uri, name, type }`
+ * with RN's own fetch, or `{ name, type, bytes }` with Expo's fetch (SDK 52+), which can't send uri parts.
+ */
+export type PhotoInput =
+  | Blob
+  | { uri: string; name: string; type: string }
+  | { name: string; type: string; bytes: () => Promise<Uint8Array> };
 
 export type ScopeClientOptions = {
   /** API server origin, e.g. "http://localhost:3000". Empty when the UI is served by the same Next app. */
