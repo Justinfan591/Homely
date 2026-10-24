@@ -86,5 +86,9 @@ input[type="number"], textarea { font: inherit; border: 1px solid #d4d4d8; borde
 .active { display: flex; flex-direction: column; gap: 10px; border-top: 1px solid var(--line); padding-top: 16px; }
 .error { background: var(--bad-soft); color: var(--bad); border-radius: 12px; padding: 10px 14px; margin-bottom: 12px; }
 .ok { color: var(--good); }
+.notice { background: var(--good-soft); color: var(--good); border-radius: 12px; padding: 10px 14px; margin-bottom: 12px; }
+.top-right { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; justify-content: flex-end; }
+.cal { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.small-btn { padding: 6px 12px; font-size: 13px; text-decoration: none; }
 .row-link { display: block; padding: 10px 0; border-bottom: 1px solid var(--line); text-decoration: none; font-weight: 600; }
 .row-link:last-child { border-bottom: 0; }

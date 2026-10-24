@@ -15,7 +15,8 @@ import {
   type ProQueueCard,
   type ProTab,
 } from "@/shared/scope";
-import { accept, advance, askMore, decline, saveRates, virtualCall } from "./actions";
+import { googleConfig } from "@/lib/scope/calendar";
+import { accept, advance, askMore, decline, disconnectGoogle, saveRates, virtualCall } from "./actions";
 import { AutoRefresh } from "./AutoRefresh";
 import { proHref } from "./href";
 import "./pro.css";
@@ -23,7 +24,7 @@ import "./pro.css";
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Scope Pro" };
 
-type Search = { provider?: string; tab?: string; job?: string; error?: string; saved?: string };
+type Search = { provider?: string; tab?: string; job?: string; error?: string; saved?: string; notice?: string };
 
 const TABS: { id: ProTab; label: string }[] = [
   { id: "new", label: "New" },
@@ -76,7 +77,10 @@ export default async function ProPage({ searchParams }: { searchParams: Promise<
             Provider dashboard · {p.trades.join(", ")} · {p.radiusKm} km radius · ★ {p.rating.toFixed(1)} ({p.ratingCount})
           </span>
         </div>
-        <span className="live">● Live</span>
+        <div className="top-right">
+          <CalendarStatus p={p} />
+          <span className="live">● Live</span>
+        </div>
       </header>
 
       <nav className="tabs">
@@ -91,6 +95,7 @@ export default async function ProPage({ searchParams }: { searchParams: Promise<
       </nav>
 
       {q.error && <p className="error">{q.error}</p>}
+      {q.notice && <p className="notice">{q.notice}</p>}
 
       {tab === "rates" ? (
         <RateCard p={p} saved={!!q.saved} />
@@ -355,9 +360,15 @@ function SpecDetail({ d, p, tab }: { d: ProJobDetail; p: Provider; tab: ProTab }
               {job.mode === "virtual" ? "Virtual call" : "Visit"}: <strong>{when(job.slot)}</strong>
               {job.mode !== "virtual" && <> · {d.home.address}</>}
               {" · "}
-              <a href={googleCalendarUrl(d, p.name)} target="_blank" rel="noreferrer">
-                Add to Google Calendar
-              </a>
+              {d.calendarLink ? (
+                <a href={d.calendarLink} target="_blank" rel="noreferrer">
+                  In your Google Calendar ↗
+                </a>
+              ) : (
+                <a href={googleCalendarUrl(d, p.name)} target="_blank" rel="noreferrer">
+                  Add to Google Calendar
+                </a>
+              )}
             </p>
           )}
           {job.rating != null && <p>Homeowner rated this {"★".repeat(job.rating)}</p>}
@@ -374,7 +385,26 @@ function SpecDetail({ d, p, tab }: { d: ProJobDetail; p: Provider; tab: ProTab }
   );
 }
 
-/** A prefilled "add to Google Calendar" link. No OAuth needed. */
+/** Connected calendar, a Connect button, or a setup hint when the OAuth client isn't configured. */
+function CalendarStatus({ p }: { p: Provider }) {
+  if (p.googleCalendar) {
+    return (
+      <form action={disconnectGoogle} className="cal">
+        <input type="hidden" name="provider" value={p.id} />
+        <span>📅 Google Calendar: {p.googleCalendar}</span>
+        <button className="btn ghost small-btn">Disconnect</button>
+      </form>
+    );
+  }
+  if (!googleConfig()) return <span className="muted small">Google Calendar: set GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET (README)</span>;
+  return (
+    <a className="btn small-btn" href={`/pro/google/connect?provider=${p.id}`}>
+      📅 Connect Google Calendar
+    </a>
+  );
+}
+
+/** Fallback when the pro hasn't connected: a prefilled "add to Google Calendar" link. No OAuth needed. */
 function googleCalendarUrl(d: ProJobDetail, providerName: string) {
   const fmt = (x: Date) => x.toISOString().replace(/[-:]|\.\d{3}/g, "");
   const start = new Date(d.job.slot!);

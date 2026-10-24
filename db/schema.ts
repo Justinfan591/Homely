@@ -149,6 +149,9 @@ export const providers = sqliteTable("providers", {
   phone: text("phone"),
   /** Offers virtual calls when no on-site pro is in range. */
   offersVirtual: integer("offers_virtual", { mode: "boolean" }).notNull().default(false),
+  /** Google Calendar connection from /pro: OAuth refresh token and the calendar's id (an email). */
+  googleRefreshToken: text("google_refresh_token"),
+  googleCalendar: text("google_calendar"),
   active: integer("active", { mode: "boolean" }).notNull().default(true),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().$defaultFn(now),
 });
@@ -229,6 +232,8 @@ export const scopeJobs = sqliteTable("scope_jobs", {
   price: real("price"),
   request: text("request", { mode: "json" }).$type<MoreInfoRequest>(),
   declinedBy: text("declined_by", { mode: "json" }).$type<number[]>().notNull().default([]),
+  /** Link to the event in the pro's Google Calendar, once accepted by a connected pro. */
+  calendarLink: text("calendar_link"),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().$defaultFn(now),
   updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().$defaultFn(now),
 });

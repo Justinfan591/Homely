@@ -11,3 +11,6 @@ uploads/*
 
 # Personal Claude Code settings
 .claude/settings.local.json
+
+# Google OAuth client downloads (contain the client secret)
+client_secret_*.json

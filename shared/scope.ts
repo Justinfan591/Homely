@@ -253,6 +253,8 @@ export type ProJobDetail = {
   slots: Slot[];
   /** Readable answers: question text → answer. */
   answers: { id: string; q: string; answer: string }[];
+  /** The event in this provider's Google Calendar, if they're connected and accepted it. */
+  calendarLink: string | null;
 };
 
 // ---------- Small helpers ----------

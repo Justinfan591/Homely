@@ -224,11 +224,34 @@ Open <http://localhost:3000/pro> and pick a provider, or go straight to `http://
 | Tab | What it does |
 | --- | --- |
 | New / Needs review / Active / Done | The provider's queue: trade, severity, area, price range, distance, confidence and age. *Needs review* holds handoffs (low confidence, or the homeowner asked for a person) and virtual calls. Jobs waiting on the homeowner stay in *New*, badged. |
-| Spec (click a card) | Photos by shot, AI summary, extracted fields, answers, notes and the price from your rate card. **Accept** (the homeowner's requested time is pre-selected; price within ±15%), **Ask for more** (pick template shots and questions, or write a request; the homeowner gets it on their phone), **Decline**. Handoffs can be routed to a virtual call. |
-| Active job | Status stepper and an **Add to Google Calendar** link. Advancing the status updates the homeowner's screen. |
+| Spec (click a card) | Photos by shot, AI summary, extracted fields, answers, notes and the price from your rate card. **Accept** (the homeowner's requested time is pre-selected; price within ±15%), **Ask for more** (pick template shots and questions, or write a request; the homeowner's phone shows a notification), **Decline**. Handoffs can be routed to a virtual call. |
+| Active job | Status stepper and the visit in **Google Calendar**: added automatically if you connected it, otherwise an **Add to Google Calendar** link. Advancing the status updates the homeowner's screen. |
+| 📅 Connect Google Calendar (top right) | Connect the provider's Google account once; every job they accept from then on becomes an event in their calendar. Needs the setup below. |
 | Rate card | `base`, `per_m2` and the severity multipliers. Saving re-prices every spec. |
 
 The page refreshes every 3 seconds.
+
+#### Google Calendar (optional)
+
+Without this, `/pro` shows a setup hint and keeps the **Add to Google Calendar** link. To connect a real calendar:
+
+1. In [Google Cloud Console](https://console.cloud.google.com/), create a project (or pick one) and enable the **Google Calendar API**.
+2. **OAuth consent screen:** choose *External*, fill in the app name and your email, and add the Google account(s) you'll connect under **Test users**. While the app is in *Testing*, only test users can connect.
+3. **Credentials → Create credentials → OAuth client ID → Web application.** Under **Authorized redirect URIs**, add `http://localhost:3000/pro/google/callback` (use the port your server runs on).
+4. Copy the client ID and secret into `.env.local`:
+
+   ```bash
+   GOOGLE_CLIENT_ID=…apps.googleusercontent.com
+   GOOGLE_CLIENT_SECRET=…
+   ```
+
+5. Restart `npm run dev`, open `/pro?provider=1` **at `http://localhost:3000`** (the redirect URI must match), and click **📅 Connect Google Calendar**. Google warns that the app isn't verified; that's expected for a test app (**Continue**).
+
+Scope only asks to manage events (`calendar.events`). The refresh token is stored in the local database (`providers.google_refresh_token`); **Disconnect** revokes it. If Google is unreachable when a job is accepted, the booking still goes through and `/pro` says why the event wasn't added.
+
+#### Notifications on the phone
+
+When a pro uses **Ask for more**, the app shows a notification ("Mold Busters needs a bit more"); tapping it opens the rescan. Allow notifications when the app first asks. Expo Go can't receive real push notifications (SDK 53+), so this is a local notification raised by the app: it shows while the app is open or was just switched away, and the home-screen banner covers the rest. Push to a closed app needs a development build (paid Apple Developer account + EAS).
 
 ---
 
@@ -267,6 +290,7 @@ The seed still creates the older accounts (`agent@demo.com`, `plumber@demo.com`,
 | `npm run build` | Build for production |
 | `npm start` | Run the production API build (run `npm run build` first) |
 | `npm run e2e` | End-to-end test of the phone app's client + the `/pro` dashboard against a running server. Cleans up after itself. |
+| `npx tsx scripts/calendar.test.ts` | Check the Google Calendar connection logic against a fake Google |
 | `npm run typecheck` | Check the server's types (`cd mobile && npm run typecheck` for the app) |
 | `npm run lint` | Run ESLint |
 | `npm run setup` | Run `db:push` and then `db:seed` |
