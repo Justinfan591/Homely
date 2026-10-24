@@ -2,16 +2,19 @@ import { matchProviders } from "@/domain/matching";
 import { priceRange } from "@/domain/pricing";
 import { slotLabel } from "@/domain/format";
 import type {
+  Classification,
   Job,
   JobSpec,
+  Offer,
   PhotoVerdict,
+  Profile,
   RecordItem,
   Scan,
   Slot,
   SpecOutcome,
   TradeId,
 } from "@/domain/types";
-import { getTemplate } from "@/templates";
+import { getTemplate, templates } from "@/templates";
 import { ApiError, type ScopeApi } from "../api";
 import { homes, providers, seedJobs, seedScans, seedSpecs } from "./seed";
 
@@ -27,6 +30,8 @@ export const mockConfig = {
   etaStepMs: 1_500,
   etaStartMinutes: 14,
   virtualDoneAfterMs: 20_000,
+  /** After "Get offers", one pro's offer arrives every this many ms. */
+  offerEveryMs: 3_000,
 };
 
 // Reachable from the debugger / test scripts (the mock layer is replaced wholesale by the real client).
@@ -39,7 +44,46 @@ const outcomes = new Map<string, SpecOutcome>();
 const attempts = new Map<string, number>();
 const retakes = new Map<string, number>();
 const simulated = new Set<string>();
+/** Offers each pro will send for an open request, revealed one at a time. */
+const pendingOffers = new Map<string, Offer[]>();
 let counter = 100;
+
+// ---- Session: the demo code is always 7246 ----
+const DEMO_CODE = "7246";
+let signedIn = false;
+const sessionListeners = new Set<(signedIn: boolean) => void>();
+const setSignedIn = (v: boolean) => {
+  signedIn = v;
+  for (const fn of sessionListeners) fn(v);
+};
+const profile: Profile = { name: "", email: null, phone: null, age: null, address: null, homeType: null };
+
+const TRADE_WORDS: [string, RegExp][] = [
+  ["plumbing_sink", /leak|drip|sink|faucet|tap|pipe|drain|toilet/i],
+  ["mold", /mou?ld|mildew|black spot|musty/i],
+  ["electrical", /outlet|socket|switch|breaker|electric|wiring|spark|power/i],
+  ["locksmith", /lock|keys?\b/i],
+  ["appliances", /fridge|washer|dryer|dishwasher|oven|stove|appliance|freezer/i],
+  ["painting", /paint|peel/i],
+  ["garden", /garden|lawn|yard|tree|hedge|grass|weed/i],
+];
+
+/** A job's fixed details, from its scan and spec. */
+function jobBase(scanId: string, specId: string) {
+  const scan = need(scans.get(scanId), "Scan");
+  const home = need(homes.find((h) => h.id === scan.homeId), "Home");
+  return {
+    specId,
+    scanId,
+    homeId: home.id,
+    trade: scan.trade,
+    title: specs.get(specId)?.title ?? getTemplate(scan.trade).title,
+    address: home.address,
+    providerPhone: null,
+  };
+}
+
+const windowSlot = (start: string): Slot => ({ id: start, start, label: slotLabel(new Date(start)) });
 
 const id = (prefix: string) => `${prefix}_${++counter}`;
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -110,6 +154,14 @@ function buildSpec(scan: Scan): JobSpec {
             ? "On-site inspection and moisture testing"
             : "On-site testing and a remediation plan",
     };
+  } else if (scan.trade !== "plumbing_sink") {
+    // The newer trades: severity from how many answers were given past the first option.
+    severity = 2 + Object.entries(a).filter(([qid]) => idx(qid) >= 2).length;
+    title = scan.description?.split(/[.!?]/)[0]?.trim() || t.title;
+    summary = `${scan.description ? `${scan.description.trim()} ` : ""}A pro will confirm on site.`;
+    fields = Object.fromEntries(
+      t.outputs.filter((k) => k !== "severity" && k !== "affected_area_m2").map((k) => [k, k === "recommended_service" ? "On-site visit" : "See photos"]),
+    );
   } else {
     // leak_rate options run from "Slow drip" to "Constant flow".
     severity = 1 + Math.max(0, idx("leak_rate")) + (a.water_off === "No" ? 1 : 0);
@@ -148,6 +200,13 @@ function buildSpec(scan: Scan): JobSpec {
 
 /** Stands in for the provider accepting and driving to the house. Derived from elapsed time. */
 function advance(job: Job): Job {
+  if (job.status === "collecting") {
+    const all = pendingOffers.get(job.id) ?? [];
+    const shown = Math.min(all.length, Math.floor((Date.now() - new Date(job.createdAt).getTime()) / mockConfig.offerEveryMs));
+    const next = { ...job, offers: all.slice(0, shown).sort((a, b) => a.price - b.price) };
+    jobs.set(job.id, next);
+    return next;
+  }
   if (!simulated.has(job.id) || job.status === "handoff") return job;
   const t = Date.now() - new Date(job.createdAt).getTime();
   const c = mockConfig;
@@ -171,6 +230,49 @@ function jobForScan(scanId: string) {
 // ---- API ---------------------------------------------------------------------------------------
 
 export const mockApi: ScopeApi = {
+  restoreSession: async () => signedIn,
+
+  startSignIn: (contact) =>
+    call("startSignIn", 400, () => {
+      const digits = contact.replace(/\D/g, "");
+      if (!contact.includes("@") && digits.length < 7) throw new ApiError("Enter a phone number or an email.", "rejected");
+      return { sentTo: contact.includes("@") ? contact : `(•••) •••-${digits.slice(-4)}`, length: DEMO_CODE.length };
+    }),
+
+  verifyCode: (contact, code) =>
+    call("verifyCode", 500, () => {
+      if (code !== DEMO_CODE) throw new ApiError("That code isn't right. Try again.", "rejected");
+      if (contact.includes("@")) profile.email = contact;
+      else profile.phone = contact;
+      setSignedIn(true);
+      return { isNew: !profile.name };
+    }),
+
+  signOut: async () => setSignedIn(false),
+
+  onSessionChange: (fn) => {
+    sessionListeners.add(fn);
+    return () => void sessionListeners.delete(fn);
+  },
+
+  getProfile: () => call("getProfile", 150, () => ({ ...profile, address: profile.address ?? homes[0].address })),
+
+  updateProfile: (data) =>
+    call("updateProfile", 300, () => {
+      Object.assign(profile, data);
+      if (data.address) homes[0] = { ...homes[0], address: data.address };
+      return { ...profile, address: profile.address ?? homes[0].address };
+    }),
+
+  transcribe: () => call("transcribe", 900, () => "There's a leak under my kitchen sink. It drips whenever the tap is on."),
+
+  classify: (text) =>
+    call("classify", 900, (): Classification => {
+      const trade = TRADE_WORDS.find(([, re]) => re.test(text))?.[0] ?? "handyman";
+      const t = templates.find((x) => x.trade === trade) ?? templates[0];
+      return { trade: t.trade, label: t.title, summary: text.split(/[.!?]/)[0]?.trim().slice(0, 80) || t.blurb };
+    }),
+
   listHomes: () => call("listHomes", 150, () => homes),
 
   listRecord: (homeId) =>
@@ -192,13 +294,35 @@ export const mockApi: ScopeApi = {
         if (job) {
           const j = advance(job);
           const status: RecordItem["status"] =
-            j.status === "pending" ? "awaiting" : j.status === "accepted" ? "scheduled" : j.status === "more_info" ? "needs_info" : j.status;
-          items.push({ ...base, status, price: j.price, href: `/track/${j.id}` });
+            j.status === "collecting"
+              ? j.offers?.length
+                ? "offers"
+                : "awaiting"
+              : j.status === "pending"
+                ? "awaiting"
+                : j.status === "accepted"
+                  ? "scheduled"
+                  : j.status === "more_info"
+                    ? "needs_info"
+                    : j.status;
+          const best = j.offers?.[0];
+          items.push({
+            ...base,
+            status,
+            price: j.price,
+            providerName: j.providerName,
+            slot: j.slot,
+            slotConfirmed: j.slotConfirmed ?? j.status !== "collecting",
+            rating: j.rating,
+            href: j.status === "collecting" ? (j.offers?.length ? `/quotes/${j.id}` : `/finding/${j.id}`) : `/booking/${j.id}`,
+            offerCount: j.offers?.length ?? 0,
+            bestOffer: best ? { price: best.price, provider: best.provider.name } : null,
+          });
         } else if (scan.followUp && scan.pendingShotIds.length) {
           items.push({ ...base, status: "needs_info", price: null, href: `/scan/${scan.id}`, followUp: scan.followUp });
         } else {
           const answered = Object.keys(scan.answers).length > 0 && scan.pendingShotIds.length === 0;
-          items.push({ ...base, status: "in_progress", price: null, href: answered ? `/spec/${scan.id}` : `/scan/${scan.id}` });
+          items.push({ ...base, status: "in_progress", price: null, href: answered ? `/book/${scan.id}` : `/scan/${scan.id}` });
         }
       }
       return items.sort((a, b) => {
@@ -207,7 +331,7 @@ export const mockApi: ScopeApi = {
       });
     }),
 
-  createScan: (homeId, trade: TradeId) =>
+  createScan: (homeId, trade: TradeId, description) =>
     call("createScan", 250, () => {
       const t = getTemplate(trade);
       const scan: Scan = {
@@ -219,6 +343,7 @@ export const mockApi: ScopeApi = {
         pendingShotIds: t.requiredShots.map((s) => s.id),
         answers: {},
         note: "",
+        description: description ?? null,
         createdAt: new Date().toISOString(),
       };
       scans.set(scan.id, scan);
@@ -252,6 +377,13 @@ export const mockApi: ScopeApi = {
       return structuredClone(scan);
     }),
 
+  markPhoto: (scanId, shotId, x, y) =>
+    call("markPhoto", 200, () => {
+      const scan = need(scans.get(scanId), "Scan");
+      scan.mark = { shotId, x, y };
+      return structuredClone(scan);
+    }),
+
   submitAnswers: (scanId, answers, note) =>
     call("submitAnswers", 300, () => {
       const scan = need(scans.get(scanId), "Scan");
@@ -276,9 +408,7 @@ export const mockApi: ScopeApi = {
         if (!jobForScan(scanId)) {
           const job: Job = {
             id: id("job"),
-            specId: spec.id,
-            scanId,
-            homeId: home.id,
+            ...jobBase(scanId, spec.id),
             providerName: scan.trade === "mold" ? "Mold Busters" : "Scope",
             providerRating: null,
             status: "handoff",
@@ -301,32 +431,71 @@ export const mockApi: ScopeApi = {
 
   getSpec: (specId) => call("getSpec", 120, () => need(specs.get(specId), "Spec")),
 
-  bookJob: (scanId, providerId, slotId) =>
-    call("bookJob", 900, () => {
+  requestOffers: (scanId, slotStart) =>
+    call("requestOffers", 700, () => {
       const existing = jobForScan(scanId);
       if (existing) return existing;
       const outcome = outcomes.get(scanId);
       if (outcome?.kind !== "match") throw new ApiError("This estimate is no longer available.", "rejected");
-      const option = need(outcome.options.find((o) => o.provider.id === providerId), "Provider");
-      const slot = need(option.slots.find((s) => s.id === slotId), "Time slot");
+      const spec = outcome.spec;
       const job: Job = {
         id: id("job"),
-        specId: outcome.spec.id,
-        scanId,
-        homeId: scans.get(scanId)!.homeId,
-        providerName: option.provider.name,
-        providerRating: option.provider.rating,
-        status: "pending",
-        slot,
-        price: priceRange(need(providers.find((p) => p.id === option.provider.id), "Provider").rateCard, outcome.spec.areaM2, outcome.spec.severity),
+        ...jobBase(scanId, spec.id),
+        providerName: "Pros nearby",
+        providerRating: null,
+        status: "collecting",
+        slot: slotStart ? windowSlot(slotStart) : null,
+        slotConfirmed: false,
+        price: null,
         etaMinutes: null,
         rating: null,
         createdAt: new Date().toISOString(),
         virtual: false,
+        offers: [],
+        invitedCount: outcome.options.length,
+        passedCount: 0,
       };
+      // Each pro prices off its own rate card, nudged a little so offers differ.
+      pendingOffers.set(
+        job.id,
+        outcome.options.map((o, i) => {
+          const range = priceRange(need(providers.find((p) => p.id === o.provider.id), "Provider").rateCard, spec.areaM2, spec.severity);
+          const mid = (range.low + range.high) / 2;
+          return {
+            id: `${job.id}_offer_${i}`,
+            provider: o.provider,
+            distanceKm: o.distanceKm,
+            price: Math.round((mid * (0.9 + ((hash(o.provider.id) % 21) / 100))) / 5) * 5,
+            slot: slotStart ? windowSlot(slotStart) : o.slots[(i + 1) % o.slots.length],
+          };
+        }),
+      );
       jobs.set(job.id, job);
-      simulated.add(job.id);
       return job;
+    }),
+
+  acceptOffer: (jobId, offerId) =>
+    call("acceptOffer", 700, () => {
+      const job = advance(need(jobs.get(jobId), "Job"));
+      if (job.status !== "collecting") throw new ApiError("This request is no longer open.", "rejected");
+      const offer = need(job.offers?.find((o) => o.id === offerId), "Offer");
+      // Restart the simulated lifecycle as already accepted.
+      const next: Job = {
+        ...job,
+        status: "accepted",
+        providerName: offer.provider.name,
+        providerPhone: "555-0100",
+        providerRating: offer.provider.rating,
+        slot: offer.slot,
+        slotConfirmed: true,
+        price: { low: offer.price, high: offer.price },
+        offers: [],
+        createdAt: new Date(Date.now() - mockConfig.acceptAfterMs).toISOString(),
+      };
+      jobs.set(jobId, next);
+      pendingOffers.delete(jobId);
+      simulated.add(jobId);
+      return next;
     }),
 
   listVirtualSlots: () => call("listVirtualSlots", 150, makeSlots),
@@ -340,9 +509,7 @@ export const mockApi: ScopeApi = {
       const slot = need(makeSlots().find((s) => s.id === slotId), "Time slot");
       const job: Job = {
         id: id("job"),
-        specId: outcome.spec.id,
-        scanId,
-        homeId: scan.homeId,
+        ...jobBase(scanId, outcome.spec.id),
         providerName: scan.trade === "mold" ? "Mold Busters" : "Scope",
         providerRating: null,
         status: "pending",
@@ -368,9 +535,7 @@ export const mockApi: ScopeApi = {
         const jobId = id("job");
         jobs.set(jobId, {
           id: jobId,
-          specId: outcome.spec.id,
-          scanId,
-          homeId: scan.homeId,
+          ...jobBase(scanId, outcome.spec.id),
           providerName: scan.trade === "mold" ? "Mold Busters" : "Scope",
           providerRating: null,
           status: "handoff",
@@ -390,19 +555,20 @@ export const mockApi: ScopeApi = {
   cancelJob: (jobId) =>
     call("cancelJob", 400, () => {
       const job = need(jobs.get(jobId), "Job");
-      if (!["pending", "handoff", "more_info", "declined"].includes(job.status)) {
+      if (!["collecting", "pending", "accepted", "handoff", "more_info", "declined"].includes(job.status)) {
         throw new ApiError("This job can't be cancelled now. Contact the pro.", "rejected");
       }
-      const next: Job = { ...job, status: "cancelled" };
+      const next: Job = { ...job, status: "cancelled", offers: [] };
       jobs.set(jobId, next);
       simulated.delete(jobId);
+      pendingOffers.delete(jobId);
       return next;
     }),
 
-  rateJob: (jobId, stars) =>
+  rateJob: (jobId, review) =>
     call("rateJob", 500, () => {
       const job = need(jobs.get(jobId), "Job");
-      const next = { ...job, rating: stars };
+      const next = { ...job, rating: review.stars };
       jobs.set(jobId, next);
       return next;
     }),

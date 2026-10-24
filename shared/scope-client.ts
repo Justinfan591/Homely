@@ -9,19 +9,30 @@
 //
 // Errors throw ScopeApiError with the server's message (safe to show to users) and HTTP status.
 import type {
+  ClassifyResult,
+  CodeLoginResponse,
   HomeInfo,
   HomeResponse,
   MoreInfoRequest,
   ProJobDetail,
   ProProvider,
   ProQueueResponse,
-  RateCard,
+  ProfileInfo,
+  ProfilePricing,
+  ProfileView,
   ScanPhotoInfo,
   ScanResponse,
   ShotResult,
   Slot,
   TemplateSummary,
 } from "./scope";
+
+export type ProfileAction =
+  | { action: "start" | "retry" | "skip" }
+  | { action: "answer"; answer: string[]; note?: string | null }
+  | { action: "pricing"; pricing: ProfilePricing }
+  | { action: "description"; description: string }
+  | { action: "website"; url: string };
 
 export type SessionUser = { id: number; name: string; email: string; role: "customer" | "provider" | "agent" };
 export type AuthResponse = { token: string; user: SessionUser };
@@ -55,7 +66,7 @@ export class ScopeApiError extends Error {
   }
 }
 
-type CallOptions = { method?: "GET" | "POST" | "PUT"; body?: unknown; form?: FormData; provider?: number; auth?: boolean };
+type CallOptions = { method?: "GET" | "POST" | "PUT" | "DELETE"; body?: unknown; form?: FormData; provider?: number; auth?: boolean };
 
 export function createScopeClient(options: ScopeClientOptions = {}) {
   const base = (options.baseUrl ?? "").replace(/\/+$/, "");
@@ -91,6 +102,12 @@ export function createScopeClient(options: ScopeClientOptions = {}) {
 
   const scanPath = (id: number, action = "") => `/api/scans/${id}${action ? `/${action}` : ""}`;
 
+  /** Adds a file part: a Blob as-is, a React Native / Expo file object as the object itself. */
+  const appendFile = (form: FormData, field: string, file: PhotoInput, filename: string) => {
+    if (typeof Blob !== "undefined" && file instanceof Blob) form.append(field, file, filename);
+    else form.append(field, file as unknown as Blob);
+  };
+
   return {
     /** Server up? Which AI ("claude", "fake" or "missing_key")? */
     health: () => call<HealthResponse>("/api/health", { auth: false }),
@@ -103,6 +120,10 @@ export function createScopeClient(options: ScopeClientOptions = {}) {
       signup: (data: { name: string; email: string; password: string; phone?: string; role?: "customer" | "provider" }) =>
         call<AuthResponse>("/api/auth/signup", { body: { role: "customer", ...data }, auth: false }),
       me: () => call<{ user: SessionUser }>("/api/auth/me"),
+      /** Sign-in step 1: phone or email. The demo sends nothing; the code is always the server's DEMO_LOGIN_CODE. */
+      startCode: (contact: string) => call<{ sentTo: string; length: number }>("/api/auth/code", { body: { contact }, auth: false }),
+      /** Sign-in step 2: signs in, creating a homeowner the first time. `isNew`: ask for name and home next. */
+      verifyCode: (contact: string, code: string) => call<CodeLoginResponse>("/api/auth/code/verify", { body: { contact, code }, auth: false }),
     },
 
     /** Homeowner flow. Needs a customer token (getToken). */
@@ -111,25 +132,44 @@ export function createScopeClient(options: ScopeClientOptions = {}) {
       /** Home + Home Record. `home` is null until setHome is called. */
       home: () => call<HomeResponse>("/api/home"),
       setHome: (home: { address: string; lat: number; lng: number; label?: string }) => call<{ home: HomeInfo }>("/api/home", { method: "PUT", body: home }),
-      /** "Scan a problem" → returns the new scan id. 409 if the home isn't set. */
-      startScan: (trade: string) => call<{ id: number }>("/api/scans", { body: { trade } }),
+      /** Name, age, address and home type. */
+      profile: () => call<ProfileInfo>("/api/profile"),
+      /** Only the fields sent change. A new address is geocoded on the server. */
+      updateProfile: (data: { name?: string; age?: number | null; address?: string; homeType?: string | null }) =>
+        call<ProfileInfo>("/api/profile", { method: "PUT", body: data }),
+      /** "Tell us what's wrong": a voice recording → its text. */
+      transcribe: (audio: PhotoInput, filename = "recording.m4a") => {
+        const form = new FormData();
+        appendFile(form, "audio", audio, filename);
+        return call<{ text: string }>("/api/intake/transcribe", { form });
+      },
+      /** Which trade the description (and optional screening photo) is about. Nothing is stored. */
+      classify: (text: string, photo?: PhotoInput | null) => {
+        const form = new FormData();
+        form.append("text", text);
+        if (photo) appendFile(form, "photo", photo, "photo.jpg");
+        return call<ClassifyResult>("/api/intake/classify", { form });
+      },
+      /** "Scan a problem" → returns the new scan id. 409 if the home isn't set. `description`: what they said on the voice screen. */
+      startScan: (trade: string, description?: string | null) => call<{ id: number }>("/api/scans", { body: { trade, description } }),
       /** Everything the scan screens render. Poll every 2 s while tracking. */
       scan: (scanId: number) => call<ScanResponse>(scanPath(scanId)),
       /** Upload one shot; Claude checks it. `ok: false` means retake (show `message`). */
       uploadShot: (scanId: number, shotId: string, photo: PhotoInput, filename = "photo.jpg") => {
         const form = new FormData();
         form.append("shotId", shotId);
-        if (typeof Blob !== "undefined" && photo instanceof Blob) form.append("photo", photo, filename);
-        else form.append("photo", photo as unknown as Blob); // React Native file object
+        appendFile(form, "photo", photo, filename);
         return call<ShotResult>(scanPath(scanId, "shots"), { form });
       },
       /** Skip an optional shot (show the shot's `skip_label` as the button). */
       skipShot: (scanId: number, shotId: string) => call<ShotResult>(scanPath(scanId, "skip"), { body: { shotId } }),
       /** Tap answers + optional note → JobSpec. Takes a few seconds with real AI. */
       finish: (scanId: number, answers: Record<string, string>, notes?: string | null) => call<ScanResponse>(scanPath(scanId, "finish"), { body: { answers, notes } }),
-      /** "Book [Provider] · [time]" with a provider from `matches`; `slot` is the requested `startsAt`. Also used to rebook after a decline. */
-      book: (scanId: number, providerId: number, slot?: string) => call<ScanResponse>(scanPath(scanId, "book"), { body: { providerId, slot } }),
-      /** No pro in range (or all declined): virtual call with the trade's partner, optionally at a requested `slot`. */
+      /** "Get offers": sends the spec to every matching pro at once. `slot` is an optional preferred `startsAt`. Poll `scan()` for `offers`. */
+      requestOffers: (scanId: number, slot?: string) => call<ScanResponse>(scanPath(scanId, "request"), { body: { slot } }),
+      /** Accept one of `offers`: that pro gets the job at that price and time. */
+      acceptOffer: (scanId: number, offerId: number) => call<ScanResponse>(`${scanPath(scanId, "offers")}/${offerId}/accept`, { method: "POST" }),
+      /** No pro in range (or all passed): virtual call with the trade's partner, optionally at a requested `slot`. */
       requestVirtualCall: (scanId: number, slot?: string) => call<ScanResponse>(scanPath(scanId, "virtual-call"), { body: { slot } }),
       /** Bookable times (for a virtual call when there are no `matches`). */
       slots: () => call<{ slots: Slot[] }>("/api/slots"),
@@ -137,7 +177,10 @@ export function createScopeClient(options: ScopeClientOptions = {}) {
       askForHuman: (scanId: number) => call<ScanResponse>(scanPath(scanId, "human"), { method: "POST" }),
       /** The pro asked for more (job.status "more_info"): reopen capture for just those items. */
       reopen: (scanId: number) => call<ScanResponse>(scanPath(scanId, "reopen"), { method: "POST" }),
-      rate: (scanId: number, stars: 1 | 2 | 3 | 4 | 5) => call<ScanResponse>(scanPath(scanId, "rate"), { body: { stars } }),
+      /** "Move the dot to the leak": x and y in % of the photo. */
+      mark: (scanId: number, mark: { shotId: string; x: number; y: number }) => call<ScanResponse>(scanPath(scanId, "mark"), { body: mark }),
+      rate: (scanId: number, stars: 1 | 2 | 3 | 4 | 5, review: { tags?: string[]; note?: string | null } = {}) =>
+        call<ScanResponse>(scanPath(scanId, "rate"), { body: { stars, ...review } }),
       cancel: (scanId: number) => call<ScanResponse>(scanPath(scanId, "cancel"), { method: "POST" }),
     },
 
@@ -148,14 +191,20 @@ export function createScopeClient(options: ScopeClientOptions = {}) {
       return {
         queue: () => call<ProQueueResponse>("/api/pro/queue", p),
         job: (jobId: number) => call<ProJobDetail>(job(jobId), p),
-        /** `slot` is a `slots[].startsAt`; `price` must be within `quote.low`–`quote.high`. */
+        /** Take a routed or review job directly. `slot` is a `slots[].startsAt`; any price ($1–$100,000). */
         accept: (jobId: number, input: { slot: string; price: number }) => call<ProJobDetail>(job(jobId, "accept"), { ...p, body: input }),
+        /** Send or update an offer on an open request (status "open"). `quote` is only a suggestion. */
+        offer: (jobId: number, input: { slot: string; price: number }) => call<ProJobDetail>(job(jobId, "offer"), { ...p, body: input }),
+        withdrawOffer: (jobId: number) => call<ProJobDetail>(job(jobId, "offer"), { ...p, method: "DELETE" }),
         askForMore: (jobId: number, input: Partial<MoreInfoRequest>) => call<ProJobDetail>(job(jobId, "ask-more"), { ...p, body: input }),
-        decline: (jobId: number) => call<ProJobDetail>(job(jobId, "decline"), { ...p, method: "POST" }),
+        /** Decline a routed job, or pass on an open request (returns `{ passed: true }`; it leaves your queue). */
+        decline: (jobId: number) => call<ProJobDetail | { passed: true }>(job(jobId, "decline"), { ...p, method: "POST" }),
         routeToVirtualCall: (jobId: number) => call<ProJobDetail>(job(jobId, "virtual-call"), { ...p, method: "POST" }),
         setStatus: (jobId: number, to: "en_route" | "done") => call<ProJobDetail>(job(jobId, "status"), { ...p, body: { to } }),
-        rateCard: () => call<{ rateCard: RateCard }>("/api/pro/rate-card", p),
-        saveRateCard: (card: RateCard) => call<{ provider: ProProvider }>("/api/pro/rate-card", { ...p, method: "PUT", body: card }),
+        /** The profile interview: status, the open question, and the pricing prefill. */
+        profile: () => call<ProfileView>("/api/pro/profile", p),
+        /** One interview step. "pricing" ends it (and later edits prices): the rate card is built from these numbers. */
+        profileAction: (body: ProfileAction) => call<ProfileView>("/api/pro/profile", { ...p, body }),
       };
     },
 

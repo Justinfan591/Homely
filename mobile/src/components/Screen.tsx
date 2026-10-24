@@ -3,10 +3,12 @@ import type { ReactNode } from "react";
 import { Pressable, ScrollView, StyleSheet, View } from "react-native";
 import Animated, { FadeInDown } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { colors, gutter, radius } from "@/theme";
+import { colors, gutter, radius, shadow } from "@/theme";
 import { haptic } from "./haptics";
 import { Icon } from "./Icon";
+import { Text } from "./Text";
 
+/** The design's round white back button (48 px, soft shadow). `dark` is for use over the camera. */
 export function CircleButton({
   icon,
   onPress,
@@ -27,46 +29,77 @@ export function CircleButton({
         haptic.tap();
         onPress();
       }}
-      style={({ pressed }) => [styles.circle, dark && styles.circleDark, pressed && { opacity: 0.6 }]}
+      style={({ pressed }) => [styles.circle, dark ? styles.circleDark : shadow, pressed && { opacity: 0.6 }]}
     >
-      <Icon name={icon} size={20} color={dark ? colors.white : colors.ink} />
+      <Icon name={icon} size={22} color={dark ? colors.white : colors.ink} />
     </Pressable>
   );
 }
 
 /**
- * Leave a flow. Every flow is entered from Home and advances with `replace`, so the stack is always
- * [Home, current screen]: popping returns to the existing Home instead of stacking a second one.
+ * Leave a flow and land on the tab it started from. Flows are pushed over the tabs and advance with
+ * `replace`, so dismissing the stack always returns to the existing tabs instead of stacking new ones.
  */
 export function goHome() {
-  router.dismissAll();
+  if (router.canDismiss()) router.dismissAll();
 }
 
-export const goBackOrHome = goHome;
+/** Leave a flow and show the Home tab (e.g. "Done" after booking). */
+export function goHomeTab() {
+  goHome();
+  router.navigate("/");
+}
+
+export function goBackOrHome() {
+  if (router.canGoBack()) router.back();
+  else goHome();
+}
+
+/** Big screen title with an optional muted line under it ("Enter the code" / "We sent a code to …"). */
+export function Title({ title, sub, size = "display" }: { title: string; sub?: string | null; size?: "display" | "title" }) {
+  return (
+    <View>
+      <Text variant={size} accessibilityRole="header">
+        {title}
+      </Text>
+      {sub ? (
+        <Text tone="soft" style={{ marginTop: size === "display" ? 12 : 8 }}>
+          {sub}
+        </Text>
+      ) : null}
+    </View>
+  );
+}
 
 /**
- * Standard screen: safe areas, a back/close control, scrolling content and a pinned footer for the single primary action.
+ * Standard screen: ground background, round back button with an optional centred title,
+ * scrolling content and a pinned footer for the main action.
  */
 export function Screen({
   children,
   footer,
   close,
   onBack,
+  title,
   trailing,
   scroll = true,
+  hideBack,
 }: {
   children: ReactNode;
   footer?: ReactNode;
   /** Show an X instead of a back arrow. */
   close?: boolean;
   onBack?: () => void;
+  /** Small centred title in the top bar ("Listening", "Booking"). */
+  title?: string;
   trailing?: ReactNode;
   scroll?: boolean;
+  hideBack?: boolean;
 }) {
   const insets = useSafeAreaInsets();
   const body = scroll ? (
     <ScrollView
-      contentContainerStyle={{ paddingHorizontal: gutter, paddingBottom: 32, flexGrow: 1 }}
+      contentContainerStyle={{ paddingHorizontal: gutter, paddingTop: 8, paddingBottom: 32, flexGrow: 1 }}
       showsVerticalScrollIndicator={false}
       keyboardShouldPersistTaps="handled"
     >
@@ -79,19 +112,20 @@ export function Screen({
   );
 
   return (
-    <View style={[styles.screen, { paddingTop: insets.top }]}>
+    <View style={[styles.screen, { paddingTop: insets.top + 8 }]}>
       <View style={styles.bar}>
-        <CircleButton
-          icon={close ? "x" : "arrow-left"}
-          label={close ? "Close" : "Back"}
-          onPress={onBack ?? goBackOrHome}
-        />
-        {trailing}
+        {hideBack ? (
+          <View style={styles.side} />
+        ) : (
+          <CircleButton icon={close ? "x" : "chevron-left"} label={close ? "Close" : "Back"} onPress={onBack ?? goBackOrHome} />
+        )}
+        <Text variant="bodyStrong" numberOfLines={1} style={styles.title}>
+          {title ?? ""}
+        </Text>
+        <View style={[styles.side, { alignItems: "flex-end" }]}>{trailing}</View>
       </View>
       {body}
-      {footer ? (
-        <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, 16) }]}>{footer}</View>
-      ) : null}
+      {footer ? <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, 16) + 8 }]}>{footer}</View> : null}
     </View>
   );
 }
@@ -99,17 +133,20 @@ export function Screen({
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg },
   bar: {
-    height: 56,
+    height: 48,
     paddingHorizontal: gutter,
+    marginBottom: 12,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
   },
+  side: { minWidth: 48 },
+  title: { flex: 1, textAlign: "center", marginHorizontal: 8 },
   circle: {
-    width: 40,
-    height: 40,
+    width: 48,
+    height: 48,
     borderRadius: radius.pill,
-    backgroundColor: colors.fill,
+    backgroundColor: colors.card,
     alignItems: "center",
     justifyContent: "center",
   },

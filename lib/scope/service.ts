@@ -1,14 +1,17 @@
 import "server-only";
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { db, schema } from "@/db";
-import type { Home, JobSpec, Provider, Scan, ScanPhoto, ScopeJob, User } from "@/db/schema";
+import type { Home, JobSpec, Offer, Provider, Scan, ScanPhoto, ScopeJob, User } from "@/db/schema";
 import { HttpError } from "@/lib/auth";
 import {
+  FREE_ANSWER_MAX,
   HANDOFF_CONFIDENCE,
   type HomeInfo,
+  type PhotoMark,
   type HomeRecordItem,
   type JobSpecInfo,
   type MoreInfoRequest,
+  type OfferInfo,
   type ScanPhotoInfo,
   type ScanResponse,
   type ScopeJobInfo,
@@ -17,11 +20,13 @@ import {
   type Template,
 } from "@/shared/scope";
 import { checkShot, generateSpec } from "./ai";
-import { distanceKm, matchProviders, virtualPartner } from "./matching";
+import { rankFit } from "./fit";
+import { suggestPrices } from "./pricing";
+import { distanceKm, etaMinutes, matchProviders, providersInRange, virtualPartner } from "./matching";
 import { checkImage, readScanPhoto, signedPhotoUrl, writeScanPhoto, type ImageType } from "./photos";
 import { getTemplate } from "./templates";
 
-const { homes, scans, scanPhotos, jobSpecs, scopeJobs, providers, ratings } = schema;
+const { homes, scans, scanPhotos, jobSpecs, scopeJobs, providers, ratings, offers } = schema;
 
 // ---------- Loading ----------
 
@@ -30,22 +35,28 @@ export function homeOf(user: User): Home | undefined {
 }
 
 export function homeInfo(h: Home): HomeInfo {
-  return { id: h.id, label: h.label, address: h.address, lat: h.lat, lng: h.lng };
+  return { id: h.id, label: h.label, address: h.address, lat: h.lat, lng: h.lng, homeType: h.homeType ?? null };
 }
 
-export function saveHome(user: User, data: { label?: string; address: string; lat: number; lng: number }) {
+export function saveHome(user: User, data: { label?: string; address: string; lat: number; lng: number; homeType?: string | null }) {
   const existing = homeOf(user);
   if (existing) {
     return db
       .update(homes)
-      .set({ address: data.address, lat: data.lat, lng: data.lng, ...(data.label ? { label: data.label } : {}) })
+      .set({
+        address: data.address,
+        lat: data.lat,
+        lng: data.lng,
+        ...(data.label ? { label: data.label } : {}),
+        ...(data.homeType !== undefined ? { homeType: data.homeType } : {}),
+      })
       .where(eq(homes.id, existing.id))
       .returning()
       .get();
   }
   return db
     .insert(homes)
-    .values({ customerId: user.id, address: data.address, lat: data.lat, lng: data.lng, label: data.label ?? "My home" })
+    .values({ customerId: user.id, address: data.address, lat: data.lat, lng: data.lng, label: data.label ?? "My home", homeType: data.homeType ?? null })
     .returning()
     .get();
 }
@@ -128,6 +139,46 @@ export function jobInfo(job: ScopeJob, home: Pick<Home, "lat" | "lng">): ScopeJo
   };
 }
 
+// ---------- Offers ----------
+
+export function offerInfo(o: Offer, p: Provider, home: Pick<Home, "lat" | "lng">): OfferInfo {
+  const km = distanceKm(home, p);
+  return {
+    id: o.id,
+    provider: { id: p.id, name: p.name, rating: p.rating, ratingCount: p.ratingCount },
+    distanceKm: Math.round(km * 10) / 10,
+    etaMinutes: etaMinutes(km),
+    price: o.price,
+    slot: o.slot.toISOString(),
+    status: o.status,
+    createdAt: o.createdAt.toISOString(),
+    updatedAt: o.updatedAt.toISOString(),
+  };
+}
+
+/** Active offers on a job, cheapest first, then soonest. */
+export function activeOffers(jobId: number, home: Pick<Home, "lat" | "lng">): OfferInfo[] {
+  return db
+    .select()
+    .from(offers)
+    .innerJoin(providers, eq(providers.id, offers.providerId))
+    .where(and(eq(offers.jobId, jobId), eq(offers.status, "active")))
+    .all()
+    .map((r) => offerInfo(r.offers, r.providers, home))
+    .sort((a, b) => a.price - b.price || a.slot.localeCompare(b.slot));
+}
+
+/** Closes a job's open offers, e.g. after cancel or once one is accepted. */
+function closeOffers(jobId: number) {
+  db.update(offers)
+    .set({ status: "lost", updatedAt: new Date() })
+    .where(and(eq(offers.jobId, jobId), inArray(offers.status, ["active", "stale"])))
+    .run();
+}
+
+/** True for a job that went out to several pros at once (not one chosen pro). */
+export const isBroadcast = (job: ScopeJob) => job.providerId == null && job.invited.length > 0;
+
 export function scanInfo(scan: Scan): ScanResponse["scan"] {
   return {
     id: scan.id,
@@ -136,6 +187,8 @@ export function scanInfo(scan: Scan): ScanResponse["scan"] {
     answers: scan.answers,
     notes: scan.notes,
     skippedShots: scan.skippedShots,
+    description: scan.description ?? null,
+    mark: scan.mark ?? null,
     focus: scan.focus ?? null,
     createdAt: scan.createdAt.toISOString(),
   };
@@ -157,6 +210,9 @@ export function scanResponse(scan: Scan, home: Home): ScanResponse {
     spec: spec ? specInfo(spec) : null,
     job: job ? jobInfo(job, home) : null,
     matches: choosing ? matchProviders(scan.trade, home, spec, job?.declinedBy ?? []) : [],
+    offers: job?.status === "open" ? activeOffers(job.id, home) : [],
+    invitedCount: job?.invited.length ?? 0,
+    passedCount: job ? job.invited.filter((id) => job.declinedBy.includes(id)).length : 0,
   };
 }
 
@@ -174,9 +230,16 @@ export function homeRecord(home: Home): HomeRecordItem[] {
     const t = getTemplateSafe(s.trade);
     const spec = specs.filter((x) => x.scanId === s.id).at(-1);
     const job = jobs.find((j) => j.scanId === s.id);
-    const provider = provs.find((p) => p.id === job?.providerId);
+    // On an open request nobody has the job yet; name the pro who asked for more, if any.
+    const asker = job?.status === "more_info" ? job.request?.providerId : null;
+    const provider = provs.find((p) => p.id === (job?.providerId ?? asker));
+    const open = job?.status === "open" ? activeOffers(job.id, home) : [];
+    const rating = job ? db.select().from(ratings).where(eq(ratings.jobId, job.id)).get() : undefined;
     const needsAction =
-      ["capturing", "clarifying", "spec_ready"].includes(s.status) || (!!job && ["more_info", "declined"].includes(job.status)) || (job?.status === "done" && !db.select().from(ratings).where(eq(ratings.jobId, job.id)).get());
+      ["capturing", "clarifying", "spec_ready"].includes(s.status) ||
+      (!!job && ["more_info", "declined"].includes(job.status)) ||
+      open.length > 0 ||
+      (job?.status === "done" && !rating);
     const updated = job && job.updatedAt > s.updatedAt ? job.updatedAt : s.updatedAt;
     return {
       scanId: s.id,
@@ -189,7 +252,12 @@ export function homeRecord(home: Home): HomeRecordItem[] {
       priceLow: spec?.priceLow ?? null,
       priceHigh: spec?.priceHigh ?? null,
       price: job?.price ?? null,
+      slot: (job?.slot ?? job?.requestedSlot)?.toISOString() ?? null,
+      slotConfirmed: !!job?.slot,
+      rating: rating?.stars ?? null,
       request: job?.status === "more_info" ? (job.request ?? null) : null,
+      offerCount: open.length,
+      bestOffer: open[0] ? { price: open[0].price, providerName: open[0].provider.name } : null,
       photoSrc: (() => {
         const p = okPhotos.find((x) => x.scanId === s.id);
         return p ? signedPhotoUrl(p.id) : null;
@@ -213,9 +281,18 @@ function getTemplateSafe(trade: string) {
 const touch = (scanId: number, set: Partial<Scan> = {}) =>
   db.update(scans).set({ ...set, updatedAt: new Date() }).where(eq(scans.id, scanId)).returning().get();
 
-export function startScan(home: Home, trade: string) {
+/** `description` is what the homeowner said on the voice screen, if they started there. */
+export function startScan(home: Home, trade: string, description?: string | null) {
   getTemplate(trade);
-  return db.insert(scans).values({ homeId: home.id, trade }).returning().get();
+  return db.insert(scans).values({ homeId: home.id, trade, description: description?.trim() || null }).returning().get();
+}
+
+/** The homeowner's dot on one of their photos ("this is where it leaks"). */
+export function setMark(scan: Scan, mark: PhotoMark) {
+  const template = getTemplate(scan.trade);
+  if (!template.required_shots.some((s) => s.id === mark.shotId)) throw new HttpError(400, "Unknown shot.");
+  if (!scanPhotoRows(scan.id).some((p) => p.shotId === mark.shotId && p.ok)) throw new HttpError(400, "Take that photo first.");
+  touch(scan.id, { mark });
 }
 
 function requireCapturing(scan: Scan, template: Template, shotId: string) {
@@ -291,8 +368,10 @@ export async function finishScan(scan: Scan, home: Home, input: { answers: Recor
       if (!q.optional) throw new HttpError(400, `Please answer: ${q.q}`);
       continue;
     }
-    if (!q.options.includes(a)) throw new HttpError(400, `"${a}" isn't an option for: ${q.q}`);
-    answers[q.id] = a;
+    // One of the options, or the homeowner's own words ("Something else? Write it").
+    const answer = a.trim();
+    if (!answer || answer.length > FREE_ANSWER_MAX) throw new HttpError(400, `Please answer in a few words: ${q.q}`);
+    answers[q.id] = answer;
   }
   const note = input.notes?.trim() || null;
   const notes = scan.focus && note ? [scan.notes, `Reply to the pro: ${note}`].filter(Boolean).join("\n") : note ?? scan.notes;
@@ -311,10 +390,28 @@ export async function finishScan(scan: Scan, home: Home, input: { answers: Recor
       skippedShots: scan.skippedShots,
       answers,
       notes,
+      description: scan.description ?? null,
+      mark: scan.mark ?? null,
       proRequest: job?.request?.message ?? null,
     });
 
-    const matches = matchProviders(scan.trade, home, generated, job?.declinedBy ?? []);
+    // Two agents over the same in-range pros, in parallel:
+    // matching ranks them by how their description fits this problem; pricing nudges each one's rate-card price.
+    const inRange = providersInRange(scan.trade, home, job?.declinedBy ?? []);
+    const [fit, priceSuggestions] = await Promise.all([
+      rankFit({
+        template,
+        spec: generated,
+        answers,
+        notes,
+        candidates: inRange.map((p) => {
+          const km = distanceKm(home, p);
+          return { provider: p, distanceKm: Math.round(km * 10) / 10, etaMinutes: etaMinutes(km) };
+        }),
+      }),
+      suggestPrices({ template, spec: generated, answers, notes, providers: inRange }),
+    ]);
+    const matches = matchProviders(scan.trade, home, { ...generated, fit, priceSuggestions }, job?.declinedBy ?? []);
     const top = matches[0];
     const prev = latestSpec(scan.id);
 
@@ -334,12 +431,20 @@ export async function finishScan(scan: Scan, home: Home, input: { answers: Recor
           priceLow: top?.quote.low ?? null,
           priceHigh: top?.quote.high ?? null,
           pricedForProviderId: top?.id ?? null,
+          fit,
+          priceSuggestions,
         })
         .returning()
         .get();
       const now = new Date();
 
-      if (job) {
+      if (job && isBroadcast(job)) {
+        // Answering an "ask for more" on an open request: reopen it to every invited pro.
+        // Offers were made against the old spec, so pros re-send them.
+        tx.update(scopeJobs).set({ specId: spec.id, status: "open", request: null, updatedAt: now }).where(eq(scopeJobs.id, job.id)).run();
+        tx.update(offers).set({ status: "stale", updatedAt: now }).where(and(eq(offers.jobId, job.id), eq(offers.status, "active"))).run();
+        tx.update(scans).set({ status: "submitted", focus: null, focusDone: [], updatedAt: now }).where(eq(scans.id, scan.id)).run();
+      } else if (job) {
         // Answering a pro's "ask for more": back to their New tab with the updated spec.
         tx.update(scopeJobs).set({ specId: spec.id, status: "pending", request: null, updatedAt: now }).where(eq(scopeJobs.id, job.id)).run();
         tx.update(scans).set({ status: "submitted", focus: null, focusDone: [], updatedAt: now }).where(eq(scans.id, scan.id)).run();
@@ -384,22 +489,35 @@ export function moveJob(job: ScopeJob, from: ScopeJobStatus[], set: Partial<Scop
   return updated;
 }
 
-export function book(scan: Scan, home: Home, providerId: number, slot?: string) {
+/** "Get offers": sends the spec to every matching pro at once. Each can send a price and time. */
+export function requestOffers(scan: Scan, home: Home, slot?: string) {
   const requestedSlot = slot ? parseSlot(slot) : null;
   const spec = latestSpec(scan.id);
-  if (!spec) throw new HttpError(409, "There's no estimate to book yet.");
+  if (!spec) throw new HttpError(409, "There's no estimate to send yet.");
   const job = jobOfScan(scan.id);
-  if (!job && scan.status !== "spec_ready") throw new HttpError(409, "This scan can't be booked right now.");
-  const match = matchProviders(scan.trade, home, spec, job?.declinedBy ?? []).find((m) => m.id === providerId);
-  if (!match) throw new HttpError(400, "That pro doesn't cover this job.");
+  if (!job && scan.status !== "spec_ready") throw new HttpError(409, "This scan can't be sent right now.");
+  const matches = matchProviders(scan.trade, home, spec, job?.declinedBy ?? []);
+  if (!matches.length) throw new HttpError(409, "No pros cover this job right now. Try a virtual call.");
+  const set = { status: "open" as const, providerId: null, specId: spec.id, mode: "onsite" as const, requestedSlot, invited: matches.map((m) => m.id) };
 
-  if (job) {
-    moveJob(job, ["declined"], { providerId, status: "pending", specId: spec.id, mode: "onsite", requestedSlot });
-  } else {
-    db.insert(scopeJobs).values({ scanId: scan.id, specId: spec.id, providerId, status: "pending", requestedSlot }).run();
-  }
-  db.update(jobSpecs).set({ priceLow: match.quote.low, priceHigh: match.quote.high, pricedForProviderId: providerId }).where(eq(jobSpecs.id, spec.id)).run();
+  if (job) moveJob(job, ["declined"], set);
+  else db.insert(scopeJobs).values({ scanId: scan.id, ...set }).run();
   touch(scan.id, { status: "submitted" });
+}
+
+/** The homeowner picks one offer: that pro gets the job and every other offer closes. */
+export function acceptOffer(scan: Scan, offerId: number): { provider: Provider; jobId: number } {
+  const job = jobOfScan(scan.id);
+  const row = db.select().from(offers).innerJoin(providers, eq(providers.id, offers.providerId)).where(eq(offers.id, offerId)).get();
+  if (!job || !row || row.offers.jobId !== job.id) throw new HttpError(404, "Offer not found.");
+  if (row.offers.status !== "active") throw new HttpError(409, "That offer is no longer available.");
+  const o = row.offers;
+  db.transaction(() => {
+    moveJob(job, ["open"], { status: "accepted", providerId: o.providerId, slot: o.slot, eta: o.slot, price: o.price });
+    closeOffers(job.id);
+    db.update(offers).set({ status: "accepted", updatedAt: new Date() }).where(eq(offers.id, o.id)).run();
+  });
+  return { provider: row.providers, jobId: job.id };
 }
 
 /** No pro in range (or all declined): ask the trade's virtual partner for a video call. */
@@ -411,8 +529,10 @@ export function requestVirtualCall(scan: Scan, slot?: string) {
   // Nobody left? providerId stays null and every pro in the trade sees it under Needs review.
   const partner = virtualPartner(scan.trade, job?.declinedBy ?? []);
   const set = { status: "virtual_call" as const, mode: "virtual" as const, providerId: partner?.id ?? null, specId: spec.id, requestedSlot };
-  if (job) moveJob(job, ["declined", "handoff"], set);
-  else if (scan.status === "spec_ready") db.insert(scopeJobs).values({ scanId: scan.id, ...set }).run();
+  if (job) {
+    moveJob(job, ["declined", "handoff", "open"], set);
+    closeOffers(job.id);
+  } else if (scan.status === "spec_ready") db.insert(scopeJobs).values({ scanId: scan.id, ...set }).run();
   else throw new HttpError(409, "This scan can't request a call right now.");
   touch(scan.id, { status: "submitted" });
 }
@@ -437,12 +557,12 @@ export function reopenForMore(scan: Scan) {
   touch(scan.id, { status: shotIds.length ? "capturing" : "clarifying", focus: { ...job.request, shotIds }, focusDone: [] });
 }
 
-export function rate(scan: Scan, stars: number) {
+export function rate(scan: Scan, stars: number, review: { tags?: string[]; note?: string | null } = {}) {
   const job = jobOfScan(scan.id);
   if (!job || job.status !== "done") throw new HttpError(409, "You can rate the job once it's done.");
   if (db.select().from(ratings).where(eq(ratings.jobId, job.id)).get()) throw new HttpError(409, "You've already rated this job.");
   db.transaction((tx) => {
-    tx.insert(ratings).values({ jobId: job.id, stars }).run();
+    tx.insert(ratings).values({ jobId: job.id, stars, tags: review.tags ?? [], note: review.note?.trim() || null }).run();
     if (job.providerId) {
       const p = tx.select().from(providers).where(eq(providers.id, job.providerId)).get() as Provider;
       const count = p.ratingCount + 1;
@@ -457,7 +577,10 @@ export function rate(scan: Scan, stars: number) {
 
 export function cancel(scan: Scan) {
   const job = jobOfScan(scan.id);
-  if (job) moveJob(job, ["pending", "handoff", "virtual_call", "more_info", "declined"], { status: "cancelled" });
+  if (job) {
+    moveJob(job, ["open", "pending", "accepted", "handoff", "virtual_call", "more_info", "declined"], { status: "cancelled" });
+    closeOffers(job.id);
+  }
   else if (scan.status === "cancelled") return;
   touch(scan.id, { status: "cancelled", focus: null });
 }

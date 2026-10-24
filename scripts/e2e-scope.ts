@@ -8,14 +8,14 @@
 // become warnings instead of failures, and it makes ~25 Claude calls.
 //
 // It signs up a throwaway homeowner, runs every flow, then deletes that homeowner's data
-// and restores provider ratings and rate cards. Pass --keep to leave the data in place.
+// and restores provider ratings, rate cards and profiles. Pass --keep to leave the data in place.
 //   E2E_BASE_URL   server to test (default http://localhost:3000)
 import fs from "node:fs";
 import path from "node:path";
 import zlib from "node:zlib";
 import { inArray, eq } from "drizzle-orm";
 import { createScopeClient, ScopeApiError, type ScopeClient } from "../shared/scope-client";
-import { HANDOFF_CONFIDENCE, quote, type ProProvider, type ScanResponse, type Template } from "../shared/scope";
+import { HANDOFF_CONFIDENCE, PROFILE_MAX_QUESTIONS, PROFILE_MIN_QUESTIONS, pricingFromRateCard, quote, rateCardFromPricing, suggestedQuote, PRICE_ADJUST_MAX, type ProProfile, type ProProvider, type ScanResponse, type Template } from "../shared/scope";
 
 const BASE = (process.env.E2E_BASE_URL ?? "http://localhost:3000").replace(/\/+$/, "");
 const KEEP = process.argv.includes("--keep");
@@ -138,15 +138,15 @@ async function scanToSpec(trade = "mold", notes: string | null = "Behind the bat
   return api.homeowner.finish(id, answersFor(s.template), notes);
 }
 
-/** A booked job, or null if real Claude handed it off for low confidence. */
-async function bookedWith(name: string) {
+/** A request open to every matching pro, or null if real Claude handed it off for low confidence. */
+async function openRequest() {
   const s = await scanToSpec();
   if (s.scan.status !== "spec_ready") {
     aiCheck(false, `spec confidence ${s.spec?.confidence} — expected ≥ ${HANDOFF_CONFIDENCE}`);
     return null;
   }
-  const booked = await api.homeowner.book(s.scan.id, byName[name].id);
-  return { scanId: s.scan.id, jobId: booked.job!.id };
+  const opened = await api.homeowner.requestOffers(s.scan.id);
+  return { scanId: s.scan.id, jobId: opened.job!.id };
 }
 
 const inTab = async (name: string, tab: "new" | "review" | "active" | "done", jobId: number) => (await pro(name).queue()).tabs[tab].some((c) => c.jobId === jobId);
@@ -183,7 +183,8 @@ async function main() {
       process.exit(2);
     }
   }
-  const snapshot = providers.map((p) => ({ id: p.id, rating: p.rating, ratingCount: p.ratingCount, rateCard: p.rateCard }));
+  const profiles = localProfiles();
+  const snapshot = providers.map((p) => ({ id: p.id, rating: p.rating, ratingCount: p.ratingCount, rateCard: p.rateCard, description: p.description, profile: profiles?.get(p.id) ?? null }));
   const email = `e2e-${Date.now()}@scope.test`;
   const userIds: number[] = [];
 
@@ -204,7 +205,7 @@ async function main() {
       await rejects(api.homeowner.startScan("roofing"), 404, "unknown trade");
     });
 
-    await flow("Happy path: scan → retake → skip → questions → spec → book → accept → en route → done → rate", async () => {
+    await flow("Happy path: scan → retake → skip → questions → spec → request → offers → accept → en route → done → rate", async () => {
       const mb = byName["Mold Busters"];
       const { id } = await api.homeowner.startScan("mold");
       let s = await api.homeowner.scan(id);
@@ -226,7 +227,7 @@ async function main() {
 
       // Questions.
       await rejects(api.homeowner.finish(id, {}), 400, "missing answers");
-      await rejects(api.homeowner.finish(id, { ...answersFor(s.template), smell: "Maybe" }), 400, "answer that isn't an option");
+      await rejects(api.homeowner.finish(id, { ...answersFor(s.template), smell: "x".repeat(201) }), 400, "own-words answer over 200 characters");
       s = await api.homeowner.finish(id, answersFor(s.template), "Behind the bathroom door.");
       if (s.scan.status !== "spec_ready") {
         aiCheck(false, `spec confidence ${s.spec?.confidence} — expected ≥ ${HANDOFF_CONFIDENCE}; rest of flow skipped`);
@@ -242,13 +243,19 @@ async function main() {
 
       // Matching + deterministic pricing.
       const names = s.matches.map((m) => m.name);
+      // Kept for the pro-side check: the list is cleared once offers are requested.
+      const quoted = s.matches;
       check(names.includes("Mold Busters") && names.includes("ClearSpore Remediation"), `in-range mold pros match (${names.join(", ")})`);
       check(!names.includes("Northshore Mold Co"), "out-of-range pro is filtered out");
       check(!names.some((n) => n.includes("Plumbing") || n.includes("Pipeline")), "other trades are filtered out");
       check(s.matches.every((m, i) => i === 0 || s.matches[i - 1].rating >= m.rating), "ranked by rating");
       for (const m of s.matches) {
-        const want = quote(byName[m.name].rateCard, spec);
-        check(m.quote.price === want.price && m.quote.low === want.low && m.quote.high === want.high, `${m.name} quote = rate card formula`);
+        // Fake pricing agent: +10% on every pro's formula price.
+        const card = byName[m.name].rateCard;
+        const want = suggestedQuote(card, spec, 10);
+        aiCheck(m.quote.price === want.price && m.quote.low === want.low && m.quote.high === want.high, `${m.name} quote = rate card formula + agent's 10%`);
+        const lo = suggestedQuote(card, spec, -PRICE_ADJUST_MAX).price, hi = suggestedQuote(card, spec, PRICE_ADJUST_MAX).price;
+        check(m.quote.price >= lo && m.quote.price <= hi, `${m.name} suggestion stays within ±${PRICE_ADJUST_MAX}% of the formula ($${m.quote.price})`);
         check(m.slots.length === 3 && m.slots.every((x) => new Date(x.startsAt).getTime() > Date.now()), `${m.name} offers 3 future slots`);
         check(m.etaMinutes > 0 && m.distanceKm >= 0, `${m.name} has distance and ETA`);
       }
@@ -265,38 +272,73 @@ async function main() {
       check((await raw(photo.url, { headers: { Authorization: `Bearer ${token}` } })).status === 200, "plain url works with the token");
       check((await raw(`${photo.url}?provider=${mb.id}`)).status === 404, "pros can't see photos before a job exists");
 
-      // Book.
-      await rejects(api.homeowner.book(id, byName["Northshore Mold Co"].id), 400, "booking an out-of-range pro");
+      // Request offers: every in-range pro sees it at once.
       await rejects(api.homeowner.rate(id, 5), 409, "rating before the job is done");
-      s = await api.homeowner.book(id, mb.id);
-      check(s.scan.status === "submitted" && s.job?.status === "pending" && s.job.provider?.id === mb.id, "booked: job pending with Mold Busters");
-      check(s.matches.length === 0, "no more matches once booked");
-      await rejects(api.homeowner.book(id, mb.id), 409, "booking twice");
+      s = await api.homeowner.requestOffers(id);
+      check(s.scan.status === "submitted" && s.job?.status === "open" && s.job.provider === null, "request is open, no pro assigned yet");
+      check(s.invitedCount === names.length && s.offers.length === 0 && s.passedCount === 0, `sent to all ${names.length} matched pros`);
+      check(s.matches.length === 0, "no pro list once requested");
+      await rejects(api.homeowner.requestOffers(id), 409, "requesting twice");
       const jobId = s.job!.id;
-      const rec = (await api.homeowner.home()).record.find((r) => r.scanId === id);
-      check(rec?.jobStatus === "pending" && rec.providerName === "Mold Busters" && !rec.needsAction, "Home Record shows the booked job");
+      let rec = (await api.homeowner.home()).record.find((r) => r.scanId === id);
+      check(rec?.jobStatus === "open" && rec.offerCount === 0 && !rec.needsAction, "Home Record shows the open request");
 
-      // Pro side.
-      const q = await pro("Mold Busters").queue();
-      const card = q.tabs.new.find((c) => c.jobId === jobId);
-      check(card && card.quote.low === spec.priceLow && card.confidence === spec.confidence, "job is in Mold Busters' New tab with the same quote");
-      await rejects(pro("ClearSpore Remediation").job(jobId), 404, "another pro can't open the job");
-      const d = await pro("Mold Busters").job(jobId);
+      // Pro side: both in-range mold pros see it; others don't.
+      const cs = byName["ClearSpore Remediation"];
+      for (const n of ["Mold Busters", "ClearSpore Remediation"]) {
+        const card = (await pro(n).queue()).tabs.new.find((c) => c.jobId === jobId);
+        check(card && card.status === "open" && card.myOffer === null && card.invitedCount === names.length, `open request in ${n}'s New tab`);
+      }
+      await rejects(pro("Northshore Mold Co").job(jobId), 404, "out-of-range pro can't open it");
+      await rejects(pro("Clearwater Plumbing").job(jobId), 404, "other trade can't open it");
+      let d = await pro("Mold Busters").job(jobId);
       check(d.photos.length >= 2 && d.photos.every((p) => p.ok), "pro sees the usable photos only");
       check(d.answers.length === s.template.questions.filter((x) => !x.optional).length, "pro sees readable answers");
-      check(d.home.address === "1 Test Street", "assigned pro sees the address");
+      check(d.home.address !== "1 Test Street", "address hidden until the homeowner picks");
+      aiCheck(d.priceReason === "Test suggestion.", "pro sees the pricing agent's reason");
+      check(d.quote.price === quoted.find((m) => m.name === "Mold Busters")?.quote.price, "pro's suggested price = the homeowner-side quote");
+      check((await pro("Mold Busters").queue()).tabs.new.find((c) => c.jobId === jobId)?.priceReason === d.priceReason, "queue card carries the same reason");
       check((await raw(d.photos[0].src)).status === 200, "pro's signed photo src loads");
-      check((await raw(`${d.photos[0].url}?provider=${mb.id}`)).status === 200, "photo via ?provider= for the assigned pro");
-      check((await raw(`${d.photos[0].url}?provider=${byName["ClearSpore Remediation"].id}`)).status === 404, "photo hidden from other pros");
+      await rejects(pro("Mold Busters").accept(jobId, { slot: d.slots[0].startsAt, price: d.quote.price }), 409, "can't take an open request directly");
 
-      // Accept.
-      await rejects(pro("Mold Busters").accept(jobId, { slot: d.slots[0].startsAt, price: d.quote.high + 50 }), 400, "price above the range");
-      await rejects(pro("Mold Busters").accept(jobId, { slot: new Date(Date.now() - 86400000).toISOString(), price: d.quote.price }), 400, "slot in the past");
-      const acc = await pro("Mold Busters").accept(jobId, { slot: d.slots[0].startsAt, price: d.quote.price });
-      check(acc.job.status === "accepted", "pro accepted");
-      await rejects(pro("Mold Busters").accept(jobId, { slot: d.slots[0].startsAt, price: d.quote.price }), 409, "accepting twice");
+      // Offers: any price, a valid slot.
+      await rejects(pro("Mold Busters").offer(jobId, { slot: d.slots[0].startsAt, price: 0 }), 400, "offer of $0");
+      await rejects(pro("Mold Busters").offer(jobId, { slot: new Date(Date.now() - 86400000).toISOString(), price: d.quote.price }), 400, "slot in the past");
+      d = await pro("Mold Busters").offer(jobId, { slot: d.slots[1].startsAt, price: d.quote.price + 40 });
+      check(d.myOffer?.status === "active" && d.myOffer.price === d.quote.price + 40, "Mold Busters sent an offer");
+      d = await pro("Mold Busters").offer(jobId, { slot: d.slots[0].startsAt, price: d.quote.price });
+      check(d.myOffer?.price === d.quote.price && d.myOffer.slot === d.slots[0].startsAt, "offer updated in place");
+      const csQuote = (await pro("ClearSpore Remediation").job(jobId)).quote;
+      const csPrice = csQuote.high + 500;
+      await pro("ClearSpore Remediation").offer(jobId, { slot: d.slots[2].startsAt, price: csPrice });
       s = await api.homeowner.scan(id);
-      check(s.job?.status === "accepted" && s.job.price === d.quote.price && s.job.slot === d.slots[0].startsAt && s.job.eta === s.job.slot, "phone shows booked slot + confirmed price");
+      check(s.offers.length === 2, "phone sees both offers");
+      check(s.offers.every((o, i) => i === 0 || s.offers[i - 1].price <= o.price), "offers sorted cheapest first");
+      const mbOffer = s.offers.find((o) => o.provider.id === mb.id)!;
+      const csOffer = s.offers.find((o) => o.provider.id === cs.id)!;
+      check(csOffer.price === csPrice, "price outside the rate-card range is allowed");
+      check(mbOffer.distanceKm >= 0 && mbOffer.etaMinutes > 0, "offer has distance and ETA");
+      rec = (await api.homeowner.home()).record.find((r) => r.scanId === id);
+      check(rec?.offerCount === 2 && rec.needsAction && rec.bestOffer?.price === Math.min(mbOffer.price, csPrice), "Home Record flags the offers");
+
+      // Withdraw → re-send.
+      await pro("ClearSpore Remediation").withdrawOffer(jobId);
+      check((await api.homeowner.scan(id)).offers.length === 1, "withdrawn offer disappears from the phone");
+      await rejects(api.homeowner.acceptOffer(id, csOffer.id), 409, "accepting a withdrawn offer");
+      await pro("ClearSpore Remediation").offer(jobId, { slot: d.slots[2].startsAt, price: csPrice });
+
+      // Accept Mold Busters' offer.
+      s = await api.homeowner.acceptOffer(id, mbOffer.id);
+      check(s.job?.status === "accepted" && s.job.provider?.id === mb.id, "accepted: Mold Busters has the job");
+      check(s.job.price === mbOffer.price && s.job.slot === mbOffer.slot && s.job.eta === s.job.slot, "phone shows the offer's price and slot");
+      check(s.offers.length === 0, "no offers listed once booked");
+      await rejects(api.homeowner.acceptOffer(id, csOffer.id), 409, "accepting a second offer");
+      await rejects(pro("ClearSpore Remediation").job(jobId), 404, "the other pro no longer sees it");
+      check(!(await inTab("ClearSpore Remediation", "new", jobId)), "gone from the other pro's queue");
+      d = await pro("Mold Busters").job(jobId);
+      check(d.home.address === "1 Test Street" && d.myOffer?.status === "accepted", "winner sees the address and an accepted offer");
+      check((await raw(`${d.photos[0].url}?provider=${mb.id}`)).status === 200, "photo via ?provider= for the assigned pro");
+      check((await raw(`${d.photos[0].url}?provider=${cs.id}`)).status === 404, "photo hidden from other pros");
       check(await inTab("Mold Busters", "active", jobId), "job in Active tab");
 
       // En route → done.
@@ -321,47 +363,54 @@ async function main() {
       check(await inTab("Mold Busters", "done", jobId), "job in Done tab");
     });
 
-    await flow("Ask for more: pro requests a shot + question → phone rescans only those → spec v2 back in New", async () => {
-      const b = await bookedWith("Mold Busters");
+    await flow("Ask for more on an open request → phone rescans → reopens to every pro, old offers stale", async () => {
+      const b = await openRequest();
       if (!b) return;
       const mb = pro("Mold Busters");
+      const cs = pro("ClearSpore Remediation");
+      const slot = (await cs.job(b.jobId)).slots[0].startsAt;
+      await cs.offer(b.jobId, { slot, price: 300 });
       await rejects(mb.askForMore(b.jobId, {}), 400, "empty request");
       const d = await mb.askForMore(b.jobId, { shotIds: ["closeup_affected"], questionIds: ["smell"], message: "A bit closer please." });
-      check(d.job.status === "more_info", "job is more_info");
+      check(d.job.status === "more_info" && d.job.provider === null, "job is more_info and still unassigned");
       let s = await api.homeowner.scan(b.scanId);
       check(s.job?.request?.shotIds.join() === "closeup_affected" && s.job.request.message === "A bit closer please.", "phone sees the request");
-      check((await api.homeowner.home()).record.find((r) => r.scanId === b.scanId)?.needsAction === true, "Home Record flags it");
+      const rec = (await api.homeowner.home()).record.find((r) => r.scanId === b.scanId);
+      check(rec?.needsAction === true && rec.providerName === "Mold Busters", "Home Record flags it, naming the pro who asked");
+      check(await inTab("ClearSpore Remediation", "new", b.jobId), "other pro still sees it (waiting)");
+      await rejects(cs.offer(b.jobId, { slot, price: 310 }), 409, "no offers while waiting for the homeowner");
       s = await api.homeowner.reopen(b.scanId);
       check(s.scan.status === "capturing" && s.remainingShots.join() === "closeup_affected", "only the requested shot is asked for");
       const shot = await api.homeowner.uploadShot(b.scanId, "closeup_affected", CLOSE, "closeup.png");
       check(shot.ok && shot.status === "clarifying", "rescan done → questions");
       await rejects(api.homeowner.finish(b.scanId, {}), 400, "the requested question must be answered");
       s = await api.homeowner.finish(b.scanId, { smell: "No" }, "It's dry now.");
-      check(s.job?.status === "pending" && s.spec?.version === 2, "job back to pending with spec v2");
+      check(s.job?.status === "open" && s.spec?.version === 2, "request open again with spec v2");
       check(s.scan.answers.smell === "No" && s.scan.focus === null && s.scan.status === "submitted", "answer updated, focus cleared");
       check(s.scan.notes?.includes("Reply to the pro: It's dry now.") ?? false, "reply appended to the notes");
-      check(await inTab("Mold Busters", "new", b.jobId), "back in the pro's New tab");
-      check((await mb.job(b.jobId)).spec.version === 2, "pro sees spec v2");
+      check(s.offers.length === 0, "old offers no longer shown");
+      check((await cs.job(b.jobId)).myOffer?.status === "stale", "the other pro's offer is marked stale");
+      check((await mb.job(b.jobId)).spec.version === 2, "pros see spec v2");
+      await cs.offer(b.jobId, { slot, price: 320 });
+      check((await api.homeowner.scan(b.scanId)).offers[0]?.price === 320, "re-sent offer shows up");
     });
 
-    await flow("Decline → phone offers the next pro → rebook → all decline → virtual call", async () => {
-      const b = await bookedWith("Mold Busters");
+    await flow("Pass → request stays open for others → everyone passes → virtual call", async () => {
+      const b = await openRequest();
       if (!b) return;
-      await pro("Mold Busters").decline(b.jobId);
+      const slot = (await pro("Mold Busters").job(b.jobId)).slots[0].startsAt;
+      await pro("Mold Busters").offer(b.jobId, { slot, price: 400 });
+      const passed = await pro("Mold Busters").decline(b.jobId);
+      check("passed" in passed && passed.passed, "pass returns { passed: true }");
       let s = await api.homeowner.scan(b.scanId);
-      check(s.job?.status === "declined", "phone sees the decline");
-      check(!s.matches.some((m) => m.name === "Mold Busters") && s.matches.some((m) => m.name === "ClearSpore Remediation"), "next pro offered, decliner excluded");
-      await rejects(api.homeowner.book(b.scanId, byName["Mold Busters"].id), 400, "rebooking the pro who declined");
-      s = await api.homeowner.book(b.scanId, byName["ClearSpore Remediation"].id);
-      check(s.job?.status === "pending" && s.job.provider?.name === "ClearSpore Remediation", "rebooked with ClearSpore");
-      check(s.spec?.priceLow === quote(byName["ClearSpore Remediation"].rateCard, s.spec!).low, "repriced for the new pro");
-      await rejects(pro("Mold Busters").job(b.jobId), 404, "decliner no longer sees it");
-      check(await inTab("ClearSpore Remediation", "new", b.jobId), "in ClearSpore's New tab");
+      check(s.job?.status === "open" && s.passedCount === 1 && s.offers.length === 0, "still open; passing withdrew the offer");
+      await rejects(pro("Mold Busters").job(b.jobId), 404, "the pro who passed no longer sees it");
+      check(await inTab("ClearSpore Remediation", "new", b.jobId), "still in ClearSpore's New tab");
       await pro("ClearSpore Remediation").decline(b.jobId);
       s = await api.homeowner.scan(b.scanId);
-      check(s.job?.status === "declined" && s.matches.length === 0, "nobody left in range");
+      check(s.job?.status === "open" && s.passedCount === s.invitedCount, "everyone passed");
       s = await api.homeowner.requestVirtualCall(b.scanId);
-      check(s.job?.status === "virtual_call" && s.job.mode === "virtual" && s.job.provider === null, "virtual call requested; partner already declined, so unassigned");
+      check(s.job?.status === "virtual_call" && s.job.mode === "virtual" && s.job.provider === null, "virtual call requested; partner already passed, so unassigned");
     });
 
     await flow("Human handoff → Needs review → route to a virtual call → accept → done", async () => {
@@ -396,7 +445,7 @@ async function main() {
         let s = await scanToSpec();
         if (s.scan.status !== "spec_ready") return aiCheck(false, "low confidence; skipped");
         check(s.matches.length === 0 && s.spec?.priceLow === null, "no matches, no price");
-        await rejects(api.homeowner.book(s.scan.id, byName["Mold Busters"].id), 400, "booking an out-of-range pro");
+        await rejects(api.homeowner.requestOffers(s.scan.id), 409, "requesting offers with nobody in range");
         s = await api.homeowner.requestVirtualCall(s.scan.id);
         check(s.job?.status === "virtual_call" && s.job.mode === "virtual" && s.job.provider?.name === "Mold Busters", "virtual call with Mold Busters");
         check(await inTab("Mold Busters", "review", s.job.id), "in Mold Busters' Needs review tab");
@@ -405,26 +454,60 @@ async function main() {
       }
     });
 
-    await flow("Rate card edit reprices immediately; homeowner cancels", async () => {
-      const b = await bookedWith("Mold Busters");
+    await flow("Profile interview ends in pricing, which reprices immediately; homeowner cancels", async () => {
+      const b = await openRequest();
       if (!b) return;
       const mb = pro("Mold Busters");
-      const original = (await mb.rateCard()).rateCard;
+      const { rateCard: original, website: originalSite } = await mb.profile();
       try {
-        await rejects(mb.saveRateCard({ base: 1, per_m2: 1, severity_multiplier: [1, 1, 1, 1] }), 400, "rate card needs 5 multipliers");
-        const card = { base: 200, per_m2: 50, severity_multiplier: [1, 1, 1, 1, 1] };
-        await mb.saveRateCard(card);
+        await rejects(mb.profileAction({ action: "website", url: "localhost:3000" }), 400, "local website address rejected");
+        const w = await mb.profileAction({ action: "website", url: "example.com" });
+        check(w.website === "https://example.com/", "website saved with https://");
+        let v = await mb.profileAction({ action: "start" });
+        check(v.status === "in_progress" && v.profile?.stage === "interview" && v.profile.pending, "interview starts with a question");
+        check(!(await mb.queue()).provider.profileFacts, "no profile facts until finished");
+        await rejects(mb.profileAction({ action: "pricing", pricing: { callOut: 1, perM2: 1, severePct: 0 } }), 409, "no pricing before the questions");
+        await rejects(mb.profileAction({ action: "answer", answer: ["not an option"] }), 400, "answer must be one of the options");
+        await rejects(mb.profileAction({ action: "answer", answer: [] }), 400, "empty answer (use skip)");
+        let asked = 0;
+        while (v.profile?.stage === "interview" && asked <= PROFILE_MAX_QUESTIONS) {
+          const q = v.profile.pending;
+          check(q && q.options.length >= 2, `question ${asked + 1} has options`);
+          v = asked === 1 ? await mb.profileAction({ action: "skip" }) : await mb.profileAction({ action: "answer", answer: [q.options[0]], note: asked === 0 ? "Attics too" : null });
+          asked++;
+        }
+        check(v.profile?.stage === "pricing", `questions end in the pricing step (${asked} asked)`);
+        check(asked >= PROFILE_MIN_QUESTIONS && asked <= PROFILE_MAX_QUESTIONS, `between ${PROFILE_MIN_QUESTIONS} and ${PROFILE_MAX_QUESTIONS} questions`);
+        if (fake) check(asked === 4, "fake AI asks 4 questions");
+        check(v.profile.turns[0].note === "Attics too" && v.profile.turns[1].answer.length === 0, "answers, notes and skips are kept");
+        check(v.profile.facts && v.profile.facts.specialties.length > 0 && v.profile.draftDescription, "agent wrote facts and a summary");
+        check(v.status === "in_progress", "still in progress until prices are saved");
+
+        await rejects(mb.profileAction({ action: "pricing", pricing: { callOut: -1, perM2: 50, severePct: 0 } }), 400, "negative price rejected");
+        const pricing = { callOut: 200, perM2: 50, severePct: 0 };
+        v = await mb.profileAction({ action: "pricing", pricing });
+        check(v.status === "complete" && v.description === v.profile?.draftDescription, "profile complete; summary saved for matching");
+        check((await mb.queue()).provider.profileFacts?.specialties.length, "queue reports the profile facts");
+        const card = rateCardFromPricing(pricing);
+        check(JSON.stringify(v.rateCard) === JSON.stringify(card), "rate card built from the pricing answers");
         const d = await mb.job(b.jobId);
-        const want = quote(card, d.spec);
-        check(d.quote.price === want.price, `detail quote follows the new card ($${d.quote.price})`);
-        check((await mb.queue()).tabs.new.find((c) => c.jobId === b.jobId)?.quote.price === want.price, "queue card follows the new card");
+        const want = suggestedQuote(card, d.spec, fake ? 10 : 0);
+        aiCheck(d.quote.price === want.price, `detail quote follows the new prices, agent adjustment kept ($${d.quote.price})`);
+        check((await mb.queue()).tabs.new.find((c) => c.jobId === b.jobId)?.quote.price === d.quote.price, "queue card matches the detail price");
+        v = await mb.profileAction({ action: "pricing", pricing: { ...pricing, perM2: 60 } });
+        check(v.rateCard.per_m2 === 60 && v.status === "complete", "prices can be edited after finishing");
       } finally {
-        await mb.saveRateCard(original);
+        // Exact rate card and profile come back in cleanup() (local server).
+        await mb.profileAction({ action: "pricing", pricing: pricingFromRateCard(original) }).catch(() => {});
+        await mb.profileAction({ action: "website", url: originalSite ?? "" }).catch(() => {});
       }
+      const cs = pro("ClearSpore Remediation");
+      await cs.offer(b.jobId, { slot: (await cs.job(b.jobId)).slots[0].startsAt, price: 250 });
       const s = await api.homeowner.cancel(b.scanId);
-      check(s.scan.status === "cancelled" && s.job?.status === "cancelled", "cancelled");
+      check(s.scan.status === "cancelled" && s.job?.status === "cancelled" && s.offers.length === 0, "cancelled");
       check(!(await inTab("Mold Busters", "new", b.jobId)), "gone from the pro's queue");
-      await rejects(api.homeowner.book(b.scanId, byName["Mold Busters"].id), 409, "can't book a cancelled scan");
+      await rejects(cs.offer(b.jobId, { slot: new Date(Date.now() + 86400000).toISOString(), price: 250 }), 404, "no offers on a cancelled request");
+      await rejects(api.homeowner.requestOffers(b.scanId), 409, "can't request a cancelled scan");
     });
 
     await flow("Second trade (plumbing_sink) is just a template file", async () => {
@@ -442,8 +525,9 @@ async function main() {
       const s = await api.homeowner.finish(id, answersFor(t));
       check(s.scan.status === "spec_ready", "optional question can be left blank");
       check(s.matches.map((m) => m.name).join() === "Clearwater Plumbing,Pipeline Pros", "plumbers matched, best rating first");
-      const booked = await api.homeowner.book(id, byName["Clearwater Plumbing"].id);
-      await rejects(pro("Mold Busters").job(booked.job!.id), 404, "mold pro can't see a plumbing job");
+      const opened = await api.homeowner.requestOffers(id);
+      check(opened.invitedCount === 2 && (await inTab("Pipeline Pros", "new", opened.job!.id)), "both plumbers get the request");
+      await rejects(pro("Mold Busters").job(opened.job!.id), 404, "mold pro can't see a plumbing job");
     });
 
     await flow("Access control, CORS and errors", async () => {
@@ -476,10 +560,22 @@ async function main() {
   process.exit(failures ? 1 : 0);
 }
 
-/** Deletes the throwaway homeowners' data and restores provider ratings and rate cards. Local server only. */
-function cleanup(userIds: number[], snapshot: { id: number; rating: number; ratingCount: number; rateCard: ProProvider["rateCard"] }[]) {
+/** Deletes the throwaway homeowners' data and restores provider ratings, rate cards and profiles. Local server only. */
+type ProviderSnapshot = { id: number; rating: number; ratingCount: number; rateCard: ProProvider["rateCard"]; description: string | null; profile: ProProfile | null };
+
+const isLocal = () => /localhost|127\.0\.0\.1/.test(BASE) && fs.existsSync(path.join(process.cwd(), "data", "molsters.db"));
+
+/** Providers' profile interviews straight from the local database (the API only shows the facts), or null for a remote server. */
+function localProfiles() {
+  if (!isLocal()) return null;
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { db, schema: t } = require("../db/index") as typeof import("../db/index");
+  return new Map(db.select().from(t.providers).all().map((p) => [p.id, p.profile]));
+}
+
+function cleanup(userIds: number[], snapshot: ProviderSnapshot[]) {
   if (!userIds.length) return;
-  if (!/localhost|127\.0\.0\.1/.test(BASE) || !fs.existsSync(path.join(process.cwd(), "data", "molsters.db"))) {
+  if (!isLocal()) {
     console.log(`\nRemote server: test data left in place (${userIds.length} test homeowner(s)).`);
     return;
   }
@@ -492,6 +588,7 @@ function cleanup(userIds: number[], snapshot: { id: number; rating: number; rati
     if (scanIds.length) {
       const jobIds = tx.select().from(t.scopeJobs).where(inArray(t.scopeJobs.scanId, scanIds)).all().map((j) => j.id);
       if (jobIds.length) tx.delete(t.ratings).where(inArray(t.ratings.jobId, jobIds)).run();
+      if (jobIds.length) tx.delete(t.offers).where(inArray(t.offers.jobId, jobIds)).run();
       tx.delete(t.scopeJobs).where(inArray(t.scopeJobs.scanId, scanIds)).run();
       tx.delete(t.jobSpecs).where(inArray(t.jobSpecs.scanId, scanIds)).run();
       tx.delete(t.scanPhotos).where(inArray(t.scanPhotos.scanId, scanIds)).run();
@@ -499,10 +596,10 @@ function cleanup(userIds: number[], snapshot: { id: number; rating: number; rati
     }
     if (homeIds.length) tx.delete(t.homes).where(inArray(t.homes.id, homeIds)).run();
     tx.delete(t.users).where(inArray(t.users.id, userIds)).run();
-    for (const p of snapshot) tx.update(t.providers).set({ rating: p.rating, ratingCount: p.ratingCount, rateCard: p.rateCard }).where(eq(t.providers.id, p.id)).run();
+    for (const p of snapshot) tx.update(t.providers).set({ rating: p.rating, ratingCount: p.ratingCount, rateCard: p.rateCard, description: p.description, profile: p.profile }).where(eq(t.providers.id, p.id)).run();
   });
   for (const id of scanIds) fs.rmSync(path.join(process.cwd(), "uploads", `scan-${id}`), { recursive: true, force: true });
-  console.log(`\nCleaned up ${scanIds.length} test scans and restored provider ratings and rate cards.`);
+  console.log(`\nCleaned up ${scanIds.length} test scans and restored provider ratings, rate cards and profiles.`);
 }
 
 main().catch((err) => {

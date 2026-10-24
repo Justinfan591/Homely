@@ -10,7 +10,8 @@
     "ios": {
       "icon": "./assets/expo.icon",
       "infoPlist": {
-        "NSCameraUsageDescription": "Scope uses the camera to photograph the problem in your home."
+        "NSCameraUsageDescription": "Scope uses the camera to photograph the problem in your home.",
+        "NSMicrophoneUsageDescription": "Scope uses the microphone so you can describe the problem out loud."
       }
     },
     "android": {
@@ -38,7 +39,15 @@
       ],
       [
         "expo-camera",
-        { "cameraPermission": "Scope uses the camera to photograph the problem in your home." }
+        {
+          "cameraPermission": "Scope uses the camera to photograph the problem in your home."
+        }
+      ],
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Scope uses the microphone so you can describe the problem out loud."
+        }
       ]
     ],
     "experiments": {

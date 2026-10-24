@@ -7,7 +7,6 @@ import { Button } from "@/components/Button";
 import { Chip, SeverityBar } from "@/components/Controls";
 import { Icon } from "@/components/Icon";
 import { goHome, Screen } from "@/components/Screen";
-import { Sheet } from "@/components/Sheet";
 import { ErrorState } from "@/components/States";
 import { Text } from "@/components/Text";
 import { moneyRange, SEVERITY_LABELS } from "@/domain/format";
@@ -18,7 +17,7 @@ import { api, ApiError } from "@/services";
 import { getTemplate } from "@/templates";
 import { colors, radius } from "@/theme";
 
-const STEPS = ["Reviewing your photos", "Measuring the area", "Matching you with pros", "Calculating your estimate"];
+const STEPS = ["Reviewing your photos", "Measuring the area", "Finding pros nearby", "Calculating your estimate"];
 
 export default function SpecScreen() {
   const { scanId } = useLocalSearchParams<{ scanId: string }>();
@@ -27,7 +26,7 @@ export default function SpecScreen() {
   const needsAnswers = error instanceof ApiError && error.code === "needs_answers";
 
   useEffect(() => {
-    if (needsAnswers) router.replace(`/clarify/${scanId}`);
+    if (needsAnswers) router.replace(`/questions/${scanId}`);
   }, [needsAnswers, scanId]);
 
   if (needsAnswers) return <Analyzing />;
@@ -140,40 +139,41 @@ function Photos({ scan }: { scan?: Scan }) {
 /** Already with a pro (e.g. after answering an "ask for more"): go to tracking. */
 function Submitted({ jobId }: { jobId: string }) {
   useEffect(() => {
-    router.replace(`/track/${jobId}`);
+    router.replace(`/booking/${jobId}`);
   }, [jobId]);
   return <Analyzing />;
 }
 
+/** Ready to go: send the scope to every pro nearby at once. Their offers arrive on the Track screen. */
 function Match({ spec, options, scan, onHuman }: { spec: JobSpec; options: MatchOption[]; scan?: Scan; onHuman: (o: SpecOutcome) => void }) {
-  const [choice, setChoice] = useState({ provider: options[0].provider.id, slot: options[0].slots[0].id });
-  const [sheet, setSheet] = useState(false);
-  const [booking, setBooking] = useState(false);
+  const [slotId, setSlotId] = useState<string | null>(null);
+  const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const option = options.find((o) => o.provider.id === choice.provider) ?? options[0];
-  const slot = option.slots.find((s) => s.id === choice.slot) ?? option.slots[0];
+  const slots = options[0]?.slots ?? [];
+  const range = { low: Math.min(...options.map((o) => o.price.low)), high: Math.max(...options.map((o) => o.price.high)) };
+  const count = options.length;
 
   async function human() {
-    setBooking(true);
+    setSending(true);
     setError(null);
     try {
       onHuman(await api.askForHuman(spec.scanId));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Couldn't reach a person. Try again.");
-      setBooking(false);
+      setSending(false);
     }
   }
 
-  async function book() {
-    setBooking(true);
+  async function request() {
+    setSending(true);
     setError(null);
     try {
-      const job = await api.bookJob(spec.scanId, option.provider.id, slot.id);
-      router.replace(`/track/${job.id}`);
+      const job = await api.requestOffers(spec.scanId, slotId ?? undefined);
+      router.replace(`/finding/${job.id}`);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Couldn't book. Try again.");
-      setBooking(false);
+      setError(e instanceof Error ? e.message : "Couldn't send your request. Try again.");
+      setSending(false);
     }
   }
 
@@ -188,9 +188,8 @@ function Match({ spec, options, scan, onHuman }: { spec: JobSpec; options: Match
               {error}
             </Text>
           ) : null}
-          <Button label={`Book ${option.provider.name} · ${slot.label}`} onPress={book} loading={booking} />
-          <Button label="See other options" variant="ghost" compact onPress={() => setSheet(true)} />
-          <Button label="Talk to a person instead" variant="ghost" compact onPress={human} disabled={booking} />
+          <Button label={`Get offers from ${count} ${count === 1 ? "pro" : "pros"}`} onPress={request} loading={sending} />
+          <Button label="Talk to a person instead" variant="ghost" compact onPress={human} disabled={sending} />
         </>
       }
     >
@@ -200,61 +199,32 @@ function Match({ spec, options, scan, onHuman }: { spec: JobSpec; options: Match
 
       <View style={styles.estimate}>
         <Text variant="label" tone="soft">
-          Estimated price
+          Typical price nearby
         </Text>
         <Text variant="display" style={{ marginTop: 4 }}>
-          {moneyRange(option.price)}
+          {moneyRange(range)}
         </Text>
         <Text variant="caption" tone="soft" style={{ marginTop: 6 }}>
-          Estimate — confirmed by provider. You pick a time; {option.provider.name} confirms it.
+          {count} {count === 1 ? "pro" : "pros"} nearby will see your scope at the same time and send their own price and time. You pick
+          the offer you like.
         </Text>
       </View>
 
-      <View style={[styles.provider]}>
-        <View style={styles.avatar}>
-          <Text variant="heading">{option.provider.name[0]}</Text>
-        </View>
-        <View style={{ flex: 1 }}>
-          <Text variant="bodyStrong">{option.provider.name}</Text>
-          <Text variant="caption" tone="soft">
-            ★ {option.provider.rating.toFixed(1)} ({option.provider.reviews}) · {option.distanceKm.toFixed(1)} km away
+      {slots.length ? (
+        <>
+          <Text variant="heading" style={{ marginTop: 28, marginBottom: 12 }}>
+            Preferred time (optional)
           </Text>
-        </View>
-      </View>
+          <View style={styles.chips}>
+            {slots.map((s) => (
+              <Chip key={s.id} label={s.label} selected={slotId === s.id} onPress={() => setSlotId(slotId === s.id ? null : s.id)} />
+            ))}
+          </View>
+        </>
+      ) : null}
 
       <View style={{ height: 24 }} />
       <Photos scan={scan} />
-
-      <Sheet visible={sheet} onClose={() => setSheet(false)} title="Choose a pro and time">
-        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ gap: 24, paddingBottom: 8 }}>
-          {options.map((o) => (
-            <View key={o.provider.id} style={{ gap: 12 }}>
-              <View style={styles.between}>
-                <View style={{ flex: 1 }}>
-                  <Text variant="bodyStrong">{o.provider.name}</Text>
-                  <Text variant="caption" tone="soft">
-                    ★ {o.provider.rating.toFixed(1)} · {o.distanceKm.toFixed(1)} km · arrives in about {o.provider.etaMinutes} min
-                  </Text>
-                </View>
-                <Text variant="bodyStrong">{moneyRange(o.price)}</Text>
-              </View>
-              <View style={styles.chips}>
-                {o.slots.map((s) => (
-                  <Chip
-                    key={s.id}
-                    label={s.label}
-                    selected={choice.provider === o.provider.id && choice.slot === s.id}
-                    onPress={() => {
-                      setChoice({ provider: o.provider.id, slot: s.id });
-                      setSheet(false);
-                    }}
-                  />
-                ))}
-              </View>
-            </View>
-          ))}
-        </ScrollView>
-      </Sheet>
     </Screen>
   );
 }
@@ -309,7 +279,7 @@ function NoProvider({ spec, scanId }: { spec: JobSpec; scanId: string }) {
     setError(null);
     try {
       const job = await api.bookVirtualCall(scanId, slotId);
-      router.replace(`/track/${job.id}`);
+      router.replace(`/booking/${job.id}`);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Couldn't book. Try again.");
       setBooking(false);
@@ -370,7 +340,7 @@ const styles = StyleSheet.create({
   between: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 },
   rule: { height: StyleSheet.hairlineWidth, backgroundColor: colors.line },
   fact: { flexDirection: "row", justifyContent: "space-between", gap: 24 },
-  estimate: { marginTop: 32, padding: 20, borderRadius: radius.md, backgroundColor: colors.fill },
+  estimate: { marginTop: 32, padding: 20, borderRadius: radius.lg, backgroundColor: colors.card },
   provider: { flexDirection: "row", alignItems: "center", gap: 14, marginTop: 12, paddingVertical: 8 },
   avatar: {
     width: 48,

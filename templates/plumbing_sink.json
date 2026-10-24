@@ -22,6 +22,13 @@
     "likely_cause": "Likely cause",
     "recommended_service": "Recommended service"
   },
+  "severity_guide": [
+    "an occasional slow drip, dry cabinet, no damage",
+    "a steady drip, or a leak only when the tap runs, with a small wet spot",
+    "a constant drip with a wet or stained cabinet floor",
+    "a leak that soaks the cabinet, swollen or damaged wood, or water that can't be shut off",
+    "constant flow, or water spreading beyond the cabinet (floor, wall, room below)"
+  ],
   "policy": {
     "finding_wording": "Leak visible, on-site inspection recommended.",
     "rules": [

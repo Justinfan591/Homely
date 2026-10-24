@@ -22,6 +22,13 @@
     "likely_moisture_source": "Likely moisture source",
     "recommended_service": "Recommended service"
   },
+  "severity_guide": [
+    "a few small spots (under 0.1 m²) on a wipeable surface, no smell, no moisture source",
+    "a small patch (under 0.5 m²), or recurring spots on sills, caulking or tiles",
+    "moderate spread (0.5-3 m²) on drywall or a ceiling, visible for months, or a musty smell",
+    "a large area (3-10 m²), several surfaces, or a likely ongoing moisture source",
+    "over 10 m², spreading into a basement, attic or crawl space, or active water or flooding"
+  ],
   "policy": {
     "finding_wording": "Visible growth likely, testing recommended.",
     "rules": [

@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit",
     "test:e2e": "tsx scripts/e2e-scope.ts",
     "e2e": "tsx scripts/e2e.ts",
+    "eval:agents": "tsx --conditions=react-server scripts/eval-agents.ts",
     "db:push": "drizzle-kit push",
     "db:seed": "tsx db/seed.ts",
     "setup": "npm run db:push && npm run db:seed",

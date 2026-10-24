@@ -7,7 +7,35 @@ export const homes: Home[] = [
   { id: "home_cottage", name: "Georgian Bay cottage", address: "18 Pine Point Rd, Honey Harbour", lat: 44.8582, lng: -79.8211 },
 ];
 
+// Two pros for each of the newer trades, near the Lakeview house.
+const more: [string, string, number, number][] = [
+  ["electrical", "Bright Spark Electric", 4.9, 156],
+  ["electrical", "Volt & Co", 4.6, 58],
+  ["handyman", "Fix-It Fred", 4.8, 201],
+  ["handyman", "Odd Jobs Collective", 4.5, 77],
+  ["locksmith", "KeyPoint Locksmiths", 4.9, 310],
+  ["locksmith", "Secure Home Locks", 4.6, 64],
+  ["painting", "Fresh Coat Painters", 4.8, 122],
+  ["painting", "Odd Jobs Painting", 4.5, 40],
+  ["garden", "Greenleaf Gardens", 4.7, 95],
+  ["garden", "Yard Pros", 4.5, 40],
+  ["appliances", "ApplianceDoc", 4.8, 188],
+  ["appliances", "QuickFix Appliance", 4.4, 52],
+];
+
 export const providers: Provider[] = [
+  ...more.map(([trade, name, rating, reviews], i): Provider => ({
+    id: name.toLowerCase().replace(/[^a-z]+/g, "_"),
+    name,
+    trades: [trade],
+    lat: 43.6532 + ((i % 3) - 1) * 0.02,
+    lng: -79.3832 + ((i % 4) - 1.5) * 0.02,
+    radiusKm: 30,
+    rating,
+    reviews,
+    rateCard: { base: 80 + (i % 4) * 15, perM2: 10, severityMultiplier: [1, 1.1, 1.4, 1.8, 2.3] },
+    etaMinutes: 25 + (i % 5) * 8,
+  })),
   {
     id: "mold_busters",
     name: "Mold Busters",
@@ -132,7 +160,11 @@ export const seedJobs: Job[] = [
     specId: "spec_done",
     scanId: "scan_done",
     homeId: "home_lakeview",
+    trade: "mold",
+    title: "Visible growth likely",
+    address: "142 Lakeview Ave, Toronto",
     providerName: "Mold Busters",
+    providerPhone: "555-0150",
     providerRating: 4.9,
     status: "done",
     slot: { id: "past", start: daysAgo(30), label: "" },

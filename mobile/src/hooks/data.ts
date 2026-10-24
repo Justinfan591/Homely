@@ -1,13 +1,24 @@
 import { useRef } from "react";
 import useSWR from "swr";
 import { api } from "@/services";
+import { useSession } from "./session";
 
 // Thin SWR wrappers over the ScopeApi. Swap the api and these keep working.
 
-export const useHomes = () => useSWR("homes", () => api.listHomes());
+export const useHomes = () => {
+  const signedIn = useSession() === "signed_in";
+  return useSWR(signedIn ? "homes" : null, () => api.listHomes());
+};
 
-export const useRecord = (homeId: string | undefined) =>
-  useSWR(homeId ? ["record", homeId] : null, () => api.listRecord(homeId!), { refreshInterval: 3000 });
+export const useProfile = () => {
+  const signedIn = useSession() === "signed_in";
+  return useSWR(signedIn ? "profile" : null, () => api.getProfile());
+};
+
+export const useRecord = (homeId: string | undefined) => {
+  const signedIn = useSession() === "signed_in";
+  return useSWR(signedIn && homeId ? ["record", homeId] : null, () => api.listRecord(homeId!), { refreshInterval: 3000 });
+};
 
 /**
  * A key part unique to one visit of a screen. Capture and the estimate act on what they load

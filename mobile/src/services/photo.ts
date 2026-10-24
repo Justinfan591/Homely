@@ -27,3 +27,11 @@ export async function preparePhoto(uri: string): Promise<PhotoInput> {
   const file = new File(out);
   return { name: "photo.jpg", type: converted ? "image/jpeg" : file.type || "image/jpeg", bytes: () => file.bytes() };
 }
+
+/** A voice recording (.m4a from expo-audio) as an upload part, the same way as photos. */
+export async function prepareAudio(uri: string): Promise<PhotoInput> {
+  if (Platform.OS === "web") return await (await fetch(uri)).blob();
+  const file = new File(uri);
+  const name = /\.(m4a|mp4|caf|wav|aac|3gp|webm)$/i.exec(uri)?.[0] ?? ".m4a";
+  return { name: `recording${name}`, type: file.type || "audio/mp4", bytes: () => file.bytes() };
+}

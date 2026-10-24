@@ -1,25 +1,30 @@
 import "server-only";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import { db, schema } from "@/db";
 import type { Provider, ScopeJob } from "@/db/schema";
 import { HttpError } from "@/lib/auth";
 import {
+  OFFER_MAX_PRICE,
   PRO_TABS,
-  quote,
+  profileStatus,
+  suggestedQuote,
+  suggestionFor,
   type MoreInfoRequest,
+  type OfferInfo,
   type ProJobDetail,
   type ProProvider,
   type ProQueueCard,
   type ProTab,
-  type RateCard,
   type Slot,
 } from "@/shared/scope";
 import { addEvent, googleConfig } from "./calendar";
 import { distanceKm, etaMinutes, slotsFor, virtualPartner } from "./matching";
-import { bestPhotos, jobInfo, moveJob, parseSlot, photoInfo, scanInfo, scanPhotoRows, specInfo } from "./service";
+import { bestPhotos, isBroadcast, jobInfo, moveJob, offerInfo, parseSlot, photoInfo, scanInfo, scanPhotoRows, specInfo } from "./service";
 import { getTemplate } from "./templates";
 
-const { providers, scopeJobs, jobSpecs, scans, homes } = schema;
+const { providers, scopeJobs, jobSpecs, scans, homes, offers, ratings } = schema;
+
+const ratingOf = (jobId: number) => db.select().from(ratings).where(eq(ratings.jobId, jobId)).get()?.stars ?? null;
 
 /** The /pro dashboard has no auth: the provider comes from ?provider=<id>. */
 export function providerFromRequest(req: Request): Provider {
@@ -46,13 +51,27 @@ export function providerInfo(p: Provider): ProProvider {
     ratingCount: p.ratingCount,
     rateCard: p.rateCard,
     offersVirtual: p.offersVirtual,
+    description: p.description,
+    profileStatus: profileStatus(p),
+    profileFacts: p.profile?.stage === "complete" ? p.profile.facts : null,
   };
 }
 
-/** Jobs routed to this provider, plus unassigned review items in its trades. */
+/** Jobs routed to this provider, open requests it was invited to, plus unassigned review items in its trades. */
 export function canProviderSee(p: Provider, job: ScopeJob, trade: string) {
   if (job.providerId === p.id) return true;
-  return job.providerId == null && ["handoff", "virtual_call"].includes(job.status) && p.trades.includes(trade) && !job.declinedBy.includes(p.id);
+  if (job.providerId != null || job.declinedBy.includes(p.id)) return false;
+  if (isBroadcast(job)) return ["open", "more_info"].includes(job.status) && job.invited.includes(p.id);
+  return ["handoff", "virtual_call"].includes(job.status) && p.trades.includes(trade);
+}
+
+function myOffer(p: Provider, jobId: number, home: { lat: number; lng: number }): OfferInfo | null {
+  const o = db
+    .select()
+    .from(offers)
+    .where(and(eq(offers.jobId, jobId), eq(offers.providerId, p.id)))
+    .get();
+  return o ? offerInfo(o, p, home) : null;
 }
 
 function loadJob(p: Provider, jobId: number) {
@@ -94,8 +113,17 @@ export function queue(p: Provider): Record<ProTab, ProQueueCard[]> {
       severity: s.severity,
       areaM2: s.areaM2,
       confidence: s.confidence,
-      quote: quote(p.rateCard, s),
+      quote: suggestedQuote(p.rateCard, s, suggestionFor(s, p.id)?.adjustPct),
+      priceReason: suggestionFor(s, p.id)?.reason ?? null,
       distanceKm: Math.round(distanceKm(r.homes, p) * 10) / 10,
+      myOffer: myOffer(p, r.scope_jobs.id, r.homes),
+      invitedCount: r.scope_jobs.invited.length,
+      description: r.scans.description ?? null,
+      slot: r.scope_jobs.slot?.toISOString() ?? null,
+      mode: r.scope_jobs.mode,
+      // Same rule as the job detail: the exact address only once the job is this pro's.
+      address: r.scope_jobs.providerId === p.id ? r.homes.address : null,
+      rating: ratingOf(r.scope_jobs.id),
       createdAt: r.scope_jobs.createdAt.toISOString(),
       updatedAt: r.scope_jobs.updatedAt.toISOString(),
     });
@@ -115,10 +143,14 @@ export function jobDetail(p: Provider, jobId: number): ProJobDetail {
     home: job.providerId === p.id ? { address: home.address, lat: home.lat, lng: home.lng } : { address: "Shown after you accept", lat: home.lat, lng: home.lng },
     photos: photoInfo(bestPhotos(template, rows)),
     spec: specInfo(spec),
-    quote: quote(p.rateCard, spec),
+    quote: suggestedQuote(p.rateCard, spec, suggestionFor(spec, p.id)?.adjustPct),
+    priceReason: suggestionFor(spec, p.id)?.reason ?? null,
     slots: withRequested(slotsFor(), job.requestedSlot),
+    myOffer: myOffer(p, job.id, home),
+    invitedCount: job.invited.length,
     answers: template.questions.filter((q) => scan.answers[q.id]).map((q) => ({ id: q.id, q: q.q, answer: scan.answers[q.id] })),
     calendarLink: job.providerId === p.id ? job.calendarLink : null,
+    fitReason: spec.fit?.find((f) => f.providerId === p.id)?.reason ?? null,
   };
 }
 
@@ -153,12 +185,43 @@ function withRequested(slots: Slot[], requested: Date | null): Slot[] {
   return [{ id: "requested", startsAt: iso }, ...slots.filter((s) => s.startsAt !== iso)];
 }
 
+function checkPrice(price: number) {
+  if (!Number.isFinite(price) || price < 1 || price > OFFER_MAX_PRICE) throw new HttpError(400, `Enter a price between $1 and $${OFFER_MAX_PRICE.toLocaleString("en-US")}.`);
+  return Math.round(price);
+}
+
+/** Directly take a job that's routed to this pro or waiting for review (not an open request: send an offer there). */
 export function accept(p: Provider, jobId: number, input: { slot: string; price: number }) {
-  const { job, spec } = loadJob(p, jobId);
-  const q = quote(p.rateCard, spec);
-  if (input.price < q.low || input.price > q.high) throw new HttpError(400, `Price must be between $${q.low} and $${q.high}.`);
+  const { job } = loadJob(p, jobId);
+  const price = checkPrice(input.price);
   const slot = parseSlot(input.slot);
-  return moveJob(job, ["pending", "handoff", "virtual_call"], { status: "accepted", providerId: p.id, slot, eta: slot, price: Math.round(input.price) });
+  return moveJob(job, ["pending", "handoff", "virtual_call"], { status: "accepted", providerId: p.id, slot, eta: slot, price });
+}
+
+/** Send (or update) this pro's price and time on an open request. The homeowner sees it right away. */
+export function sendOffer(p: Provider, jobId: number, input: { slot: string; price: number }) {
+  const { job } = loadJob(p, jobId);
+  if (job.status !== "open") throw new HttpError(409, "This request isn't taking offers right now.");
+  const price = checkPrice(input.price);
+  const slot = parseSlot(input.slot);
+  const now = new Date();
+  db.insert(offers)
+    .values({ jobId, providerId: p.id, price, slot, status: "active" })
+    .onConflictDoUpdate({ target: [offers.jobId, offers.providerId], set: { price, slot, status: "active", updatedAt: now } })
+    .run();
+  db.update(scopeJobs).set({ updatedAt: now }).where(eq(scopeJobs.id, jobId)).run();
+}
+
+export function withdrawOffer(p: Provider, jobId: number) {
+  const { job } = loadJob(p, jobId);
+  if (job.status !== "open") throw new HttpError(409, "This request is no longer open.");
+  const done = db
+    .update(offers)
+    .set({ status: "withdrawn", updatedAt: new Date() })
+    .where(and(eq(offers.jobId, jobId), eq(offers.providerId, p.id), inArray(offers.status, ["active", "stale"])))
+    .returning()
+    .get();
+  if (!done) throw new HttpError(409, "You don't have an offer on this request.");
 }
 
 export function askForMore(p: Provider, jobId: number, input: MoreInfoRequest) {
@@ -168,12 +231,24 @@ export function askForMore(p: Provider, jobId: number, input: MoreInfoRequest) {
   const questionIds = [...new Set(input.questionIds)].filter((id) => t.questions.some((q) => q.id === id));
   const message = input.message?.trim() || null;
   if (!shotIds.length && !questionIds.length && !message) throw new HttpError(400, "Pick at least one photo or question, or write a request.");
-  return moveJob(job, ["pending", "handoff", "virtual_call"], { status: "more_info", providerId: job.providerId ?? p.id, request: { shotIds, questionIds, message } });
+  // An open request stays unassigned; we just remember who asked.
+  const providerId = isBroadcast(job) ? null : (job.providerId ?? p.id);
+  return moveJob(job, ["open", "pending", "handoff", "virtual_call"], { status: "more_info", providerId, request: { shotIds, questionIds, message, providerId: p.id } });
 }
 
 export function decline(p: Provider, jobId: number) {
   const { job } = loadJob(p, jobId);
-  return moveJob(job, ["pending", "virtual_call"], { status: "declined", providerId: p.id, declinedBy: [...new Set([...job.declinedBy, p.id])] });
+  const declinedBy = [...new Set([...job.declinedBy, p.id])];
+  if (isBroadcast(job)) {
+    // "Pass" on an open request: it stays open for everyone else.
+    if (job.status !== "open") throw new HttpError(409, `This job is ${job.status.replace("_", " ")} and can't do that now.`);
+    db.update(offers)
+      .set({ status: "withdrawn", updatedAt: new Date() })
+      .where(and(eq(offers.jobId, jobId), eq(offers.providerId, p.id), inArray(offers.status, ["active", "stale"])))
+      .run();
+    return moveJob(job, ["open"], { declinedBy });
+  }
+  return moveJob(job, ["pending", "virtual_call"], { status: "declined", providerId: p.id, declinedBy });
 }
 
 /** Needs review → hand the homeowner to the trade's virtual-call partner. */
@@ -194,6 +269,3 @@ export function advance(p: Provider, jobId: number, to: "en_route" | "done") {
   return moveJob(job, job.mode === "virtual" ? ["accepted", "en_route"] : ["en_route"], { status: "done", eta: null });
 }
 
-export function saveRateCard(p: Provider, card: RateCard) {
-  return db.update(providers).set({ rateCard: card }).where(eq(providers.id, p.id)).returning().get();
-}

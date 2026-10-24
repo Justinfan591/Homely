@@ -1,7 +1,7 @@
-import { router, useLocalSearchParams } from "expo-router";
+import { Redirect, router, useLocalSearchParams } from "expo-router";
 import { useEffect, useState } from "react";
 import { StyleSheet, View } from "react-native";
-import Animated, { FadeIn, FadeInDown, useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
+import Animated, { FadeIn, FadeInDown, useAnimatedStyle, useSharedValue, withRepeat, withTiming } from "react-native-reanimated";
 import { Button } from "@/components/Button";
 import { Stars } from "@/components/Controls";
 import { haptic } from "@/components/haptics";
@@ -9,8 +9,8 @@ import { Icon } from "@/components/Icon";
 import { goHome, Screen } from "@/components/Screen";
 import { ErrorState } from "@/components/States";
 import { Text } from "@/components/Text";
-import { moneyRange, shortDate } from "@/domain/format";
-import type { Job } from "@/domain/types";
+import { money, moneyRange, shortDate } from "@/domain/format";
+import type { Job, Offer } from "@/domain/types";
 import { useJob } from "@/hooks/data";
 import { api } from "@/services";
 import { colors, radius } from "@/theme";
@@ -28,6 +28,7 @@ export default function Track() {
   }
   if (!job) return <Screen close onBack={() => goHome()}><View /></Screen>;
   const refresh = () => void mutate();
+  if (job.status === "collecting") return <Collecting job={job} onChange={refresh} />;
   if (job.status === "handoff") return <InReview job={job} onChange={refresh} />;
   if (job.status === "more_info") return <MoreInfo job={job} onChange={refresh} />;
   if (job.status === "declined") return <Declined job={job} onChange={refresh} />;
@@ -68,6 +69,147 @@ function CancelLink({ job, onDone }: { job: Job; onDone: () => void }) {
         onPress={() => (confirming ? cancel() : setConfirming(true))}
       />
     </>
+  );
+}
+
+/** Uber-style: the request went to every pro nearby; offers pop in as they arrive and the homeowner picks one. */
+function Collecting({ job, onChange }: { job: Job; onChange: () => void }) {
+  const [accepting, setAccepting] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const offers = job.offers ?? [];
+  const invited = job.invitedCount ?? 0;
+  const passed = job.passedCount ?? 0;
+  const waitingOn = Math.max(0, invited - passed - offers.length);
+  const nobodyLeft = !offers.length && invited > 0 && passed >= invited;
+
+  async function accept(o: Offer) {
+    setAccepting(o.id);
+    setError(null);
+    try {
+      await api.acceptOffer(job.id, o.id);
+      haptic.success();
+      onChange();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't accept that offer. Try another.");
+      setAccepting(null);
+      onChange();
+    }
+  }
+
+  // Offers coming in have their own screens; this one only covers "every pro passed".
+  if (!nobodyLeft) return <Redirect href={offers.length ? `/quotes/${job.id}` : `/finding/${job.id}`} />;
+
+  if (nobodyLeft) {
+    return (
+      <Screen
+        close
+        onBack={() => goHome()}
+        footer={
+          <>
+            <Button label="Book a virtual call" icon="video" onPress={() => router.replace(`/spec/${job.scanId}`)} />
+            <CancelLink job={job} onDone={onChange} />
+          </>
+        }
+      >
+        <View style={[styles.reviewBadge, { backgroundColor: colors.fill }]}>
+          <Icon name="calendar" size={26} />
+        </View>
+        <Text variant="title" style={{ marginTop: 20 }}>
+          No pros are free for this one
+        </Text>
+        <Text tone="soft" style={{ marginTop: 8 }}>
+          Every pro nearby passed. Your scope is saved, and you can walk through it with a specialist on a video call instead.
+        </Text>
+      </Screen>
+    );
+  }
+
+  return (
+    <Screen
+      close
+      onBack={() => goHome()}
+      footer={
+        <>
+          {error ? (
+            <Text variant="caption" tone="danger" style={{ textAlign: "center" }} accessibilityRole="alert">
+              {error}
+            </Text>
+          ) : null}
+          <Button label="Back to home" variant="secondary" onPress={() => goHome()} />
+          <CancelLink job={job} onDone={onChange} />
+        </>
+      }
+    >
+      <Animated.View key={offers.length ? "offers" : "waiting"} entering={FadeInDown.duration(320)}>
+        <Text variant="display" accessibilityLiveRegion="polite">
+          {offers.length ? `${offers.length} ${offers.length === 1 ? "offer" : "offers"} in` : "Asking pros nearby…"}
+        </Text>
+        <Text tone="soft" style={{ marginTop: 10 }}>
+          {waitingOn > 0
+            ? `Sent to ${invited} ${invited === 1 ? "pro" : "pros"} at once. Waiting on ${waitingOn} more. Pick an offer whenever you're ready.`
+            : "Everyone nearby has answered. Pick the offer you like."}
+        </Text>
+      </Animated.View>
+
+      {waitingOn > 0 ? <Pulse /> : null}
+
+      <View style={{ gap: 12, marginTop: 28 }}>
+        {offers.map((o, i) => (
+          <Animated.View key={o.id} entering={FadeInDown.duration(360)} style={styles.offer}>
+            <View style={styles.providerRow}>
+              <View style={styles.avatar}>
+                <Text variant="heading">{o.provider.name[0]}</Text>
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text variant="bodyStrong">{o.provider.name}</Text>
+                <Text variant="caption" tone="soft">
+                  ★ {o.provider.rating.toFixed(1)} ({o.provider.reviews}) · {o.distanceKm.toFixed(1)} km away
+                </Text>
+              </View>
+              <View style={{ alignItems: "flex-end" }}>
+                <Text variant="heading">{money(o.price)}</Text>
+                {i === 0 && offers.length > 1 ? (
+                  <Text variant="caption" tone="accent">
+                    Lowest
+                  </Text>
+                ) : null}
+              </View>
+            </View>
+            <View style={styles.rule} />
+            <Row label="Arrival window" value={o.slot.label || shortDate(o.slot.start)} />
+            <Button
+              label={`Accept ${money(o.price)}`}
+              compact
+              onPress={() => accept(o)}
+              loading={accepting === o.id}
+              disabled={accepting != null && accepting !== o.id}
+            />
+          </Animated.View>
+        ))}
+      </View>
+
+      {job.price ? (
+        <Text variant="caption" tone="soft" style={{ marginTop: 20 }}>
+          Typical price nearby: {moneyRange(job.price)}. Each pro sets their own price.
+        </Text>
+      ) : null}
+    </Screen>
+  );
+}
+
+/** A soft "searching" pulse while offers are still coming in. */
+function Pulse() {
+  const v = useSharedValue(0.4);
+  useEffect(() => {
+    v.value = withRepeat(withTiming(1, { duration: 900 }), -1, true);
+  }, [v]);
+  const style = useAnimatedStyle(() => ({ opacity: v.value, transform: [{ scale: 0.9 + v.value * 0.1 }] }));
+  return (
+    <View style={{ alignItems: "center", marginTop: 28 }}>
+      <Animated.View style={[styles.pulse, style]}>
+        <Icon name="search" size={22} color={colors.white} />
+      </Animated.View>
+    </View>
   );
 }
 
@@ -148,7 +290,7 @@ function Progress({ job, onRated }: { job: Job; onRated: () => void }) {
     setSaving(true);
     setRateError(null);
     try {
-      await api.rateJob(job.id, stars);
+      await api.rateJob(job.id, { stars, tags: [], note: "" });
       onRated();
     } catch (e) {
       setRateError(e instanceof Error ? e.message : "Couldn't save your rating.");
@@ -327,7 +469,7 @@ const styles = StyleSheet.create({
   stepper: { flexDirection: "row", gap: 6, marginTop: 8 },
   track: { height: 4, borderRadius: 2, backgroundColor: colors.line, overflow: "hidden" },
   fill: { height: 4, backgroundColor: colors.ink },
-  card: { marginTop: 40, padding: 20, borderRadius: radius.md, backgroundColor: colors.fill, gap: 14 },
+  card: { marginTop: 40, padding: 20, borderRadius: radius.lg, backgroundColor: colors.card, gap: 14 },
   providerRow: { flexDirection: "row", alignItems: "center", gap: 14 },
   avatar: {
     width: 48,
@@ -339,5 +481,7 @@ const styles = StyleSheet.create({
   },
   rule: { height: StyleSheet.hairlineWidth, backgroundColor: colors.line },
   row: { flexDirection: "row", justifyContent: "space-between", gap: 16 },
+  offer: { padding: 18, borderRadius: radius.lg, backgroundColor: colors.card, gap: 14 },
+  pulse: { width: 52, height: 52, borderRadius: 26, backgroundColor: colors.ink, alignItems: "center", justifyContent: "center" },
   reviewBadge: { width: 56, height: 56, borderRadius: 28, backgroundColor: colors.accentSoft, alignItems: "center", justifyContent: "center" },
 });

@@ -1,0 +1,34 @@
+{
+  "trade": "handyman",
+  "label": "Handyman",
+  "description": "Small repairs: doors, cabinets, shelves, drywall holes, mounting and assembly.",
+  "icon": "tool",
+  "area_label": "Area to repair",
+  "required_shots": [
+    { "id": "item_closeup", "prompt": "Get close to what needs fixing", "tip": "Show the damage or the part that's loose.", "hint": "A clear close-up of the item or damage to repair." },
+    { "id": "item_wide", "prompt": "Step back and show it in the room", "tip": "So the pro can judge size and access.", "hint": "A wider view showing the item, its size and what's around it." },
+    { "id": "parts", "prompt": "Show any parts or materials you have", "tip": "Hardware, a new shelf, paint, the box it came in.", "hint": "Parts, hardware or materials the homeowner already has.", "optional": true, "skip_label": "I don't have any" }
+  ],
+  "questions": [
+    { "id": "job_kind", "q": "What kind of job is it?", "options": ["Repair", "Install or mount", "Assemble", "Not sure"] },
+    { "id": "size", "q": "How big is it?", "options": ["Small (under an hour)", "Medium (a few hours)", "Large (a day or more)"] }
+  ],
+  "notes": { "enabled": true, "prompt": "Anything else? (optional)" },
+  "outputs": ["affected_area_m2", "severity", "task", "recommended_service"],
+  "output_labels": { "task": "Task", "recommended_service": "Recommended service" },
+  "severity_guide": [
+    "a quick cosmetic fix: a loose handle, a squeaky hinge",
+    "one small repair or install: a shelf, a door that sticks, a small hole",
+    "a few related tasks or a larger single repair",
+    "a large repair, several rooms, or damage that's getting worse",
+    "damage that makes something unsafe or unusable, e.g. a door that won't close or a falling fixture"
+  ],
+  "policy": {
+    "finding_wording": "Repair needed as shown, on-site visit recommended.",
+    "rules": [
+      "Describe what is visible; don't guess hidden damage.",
+      "affected_area_m2 is the damaged or worked-on surface, often under 1."
+    ]
+  },
+  "virtual_call_label": "Book a virtual handyman call"
+}

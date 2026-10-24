@@ -1,50 +1,35 @@
-import { CameraView, useCameraPermissions } from "expo-camera";
 import { Image } from "expo-image";
-import * as ImagePicker from "expo-image-picker";
 import { router, useLocalSearchParams } from "expo-router";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Linking, Pressable, StyleSheet, View } from "react-native";
-import Animated, {
-  FadeIn,
-  FadeInDown,
-  FadeOut,
-  useAnimatedStyle,
-  useSharedValue,
-  withSequence,
-  withTiming,
-} from "react-native-reanimated";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { Button } from "@/components/Button";
-import { ProgressDots } from "@/components/Controls";
-import { Glass } from "@/components/Glass";
+import { ActivityIndicator, Pressable, StyleSheet, View } from "react-native";
+import Animated, { FadeInDown, useAnimatedStyle, useSharedValue, withSequence, withTiming } from "react-native-reanimated";
+import { CameraPanel, pickFromLibrary, Shutter, useCamera } from "@/components/CameraPanel";
 import { haptic } from "@/components/haptics";
 import { Icon } from "@/components/Icon";
-import { CircleButton, goBackOrHome } from "@/components/Screen";
+import { goHome, Screen } from "@/components/Screen";
 import { ErrorState } from "@/components/States";
 import { Text } from "@/components/Text";
+import { markShot } from "@/domain/scan";
 import { useScan } from "@/hooks/data";
 import { api } from "@/services";
 import { getTemplate } from "@/templates";
-import { colors, gutter, radius } from "@/theme";
+import { colors, shadow } from "@/theme";
 
 type Phase = { kind: "live" } | { kind: "checking"; uri: string } | { kind: "accepted"; uri: string };
 
+/** Capture · guided photos. One prompt at a time; each photo is checked before moving on. */
 export default function ScanScreen() {
   const { scanId } = useLocalSearchParams<{ scanId: string }>();
   const { data: scan, error, mutate } = useScan(scanId);
-  const insets = useSafeAreaInsets();
-  const [permission, requestPermission] = useCameraPermissions();
-  const camera = useRef<CameraView>(null);
+  const camera = useCamera();
 
   const [phase, setPhase] = useState<Phase>({ kind: "live" });
-  const [notice, setNotice] = useState<{ text: string; bad: boolean } | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [index, setIndex] = useState(0);
-  const [done, setDone] = useState<Set<string>>(new Set());
-  const [skipped, setSkipped] = useState<Set<string>>(new Set());
+  const [taken, setTaken] = useState<string[]>([]);
   const [ready, setReady] = useState(false);
   const [busy, setBusy] = useState(false);
   const shake = useSharedValue(0);
-  const flash = useSharedValue(0);
 
   const template = scan ? getTemplate(scan.trade) : undefined;
   // Which shots this session covers: the whole template, or just what a provider asked for.
@@ -59,8 +44,6 @@ export default function ScanScreen() {
   // Resume where a draft left off.
   useEffect(() => {
     if (scan && !ready) {
-      setDone(new Set(scan.photos.map((p) => p.shotId)));
-      setSkipped(new Set(scan.skipped));
       const firstOpen = (sessionShots.current ?? []).findIndex((id) => scan.pendingShotIds.includes(id));
       setIndex(Math.max(0, firstOpen));
       setReady(true);
@@ -68,22 +51,28 @@ export default function ScanScreen() {
   }, [scan, ready]);
 
   const shakeStyle = useAnimatedStyle(() => ({ transform: [{ translateX: shake.value }] }));
-  const flashStyle = useAnimatedStyle(() => ({ opacity: flash.value }));
 
-  function finish() {
-    // A pro's follow-up may ask questions again; otherwise answers from the first pass are kept.
-    const askAgain = !!scan?.followUp?.questionIds?.length;
-    const hasAnswers = scan && Object.keys(scan.answers).length > 0;
-    router.replace(hasAnswers && !askAgain ? `/spec/${scanId}` : `/clarify/${scanId}`);
+  async function finish() {
+    const latest = await mutate().catch(() => scan);
+    const s = latest ?? scan;
+    if (!s) return;
+    if (s.followUp) {
+      // A pro's follow-up may ask questions again; otherwise the first answers are kept.
+      const askAgain = !!s.followUp.questionIds?.length;
+      const hasAnswers = Object.keys(s.answers).length > 0;
+      router.replace(hasAnswers && !askAgain ? `/book/${scanId}` : `/questions/${scanId}`);
+      return;
+    }
+    router.replace(markShot(s) ? `/mark/${scanId}` : `/questions/${scanId}`);
   }
 
   // Nothing to photograph (e.g. the pro only asked a question): go straight on.
   useEffect(() => {
-    if (scan && template && ready && shots.length === 0) finish();
+    if (scan && template && ready && shots.length === 0) void finish();
   }, [scan, template, ready, shots.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function advance() {
-    if (index + 1 >= shots.length) finish();
+    if (index + 1 >= shots.length) void finish();
     else {
       setIndex(index + 1);
       setPhase({ kind: "live" });
@@ -99,9 +88,8 @@ export default function ScanScreen() {
       const verdict = await api.submitPhoto(scanId, shot.id, uri);
       if (verdict.ok) {
         haptic.success();
-        setDone((d) => new Set(d).add(shot.id));
+        setTaken((t) => [...t, uri]);
         setPhase({ kind: "accepted", uri });
-        mutate();
         setTimeout(advance, 650);
       } else {
         haptic.warning();
@@ -111,33 +99,32 @@ export default function ScanScreen() {
           withTiming(-6, { duration: 70 }),
           withTiming(0, { duration: 50 }),
         );
-        setNotice({ text: verdict.message, bad: true });
+        setNotice(verdict.message);
         setPhase({ kind: "live" });
       }
     } catch (e) {
-      setNotice({ text: e instanceof Error ? e.message : "Upload failed. Try again.", bad: true });
+      setNotice(e instanceof Error ? e.message : "Upload failed. Try again.");
       setPhase({ kind: "live" });
     }
   }
 
   async function capture() {
-    if (busy || phase.kind !== "live" || !camera.current) return;
+    if (busy || phase.kind !== "live") return;
     setBusy(true);
-    haptic.tap();
-    flash.value = withSequence(withTiming(0.7, { duration: 60 }), withTiming(0, { duration: 220 }));
     try {
-      const photo = await camera.current.takePictureAsync({ quality: 0.6, skipProcessing: true });
-      await submit(photo.uri);
+      const uri = await camera.snap();
+      if (uri) await submit(uri);
     } catch {
-      setNotice({ text: "Couldn't take the photo. Try again.", bad: true });
+      setNotice("Couldn't take the photo. Try again.");
     } finally {
       setBusy(false);
     }
   }
 
-  async function pickFromLibrary() {
-    const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ["images"], quality: 0.6 });
-    if (!res.canceled && res.assets[0]) await submit(res.assets[0].uri);
+  async function library() {
+    if (phase.kind !== "live") return;
+    const uri = await pickFromLibrary();
+    if (uri) await submit(uri);
   }
 
   async function skip() {
@@ -145,227 +132,88 @@ export default function ScanScreen() {
     haptic.select();
     try {
       await api.skipShot(scanId, shot.id);
-      setSkipped((s) => new Set(s).add(shot.id));
-      mutate();
       advance();
     } catch (e) {
-      setNotice({ text: e instanceof Error ? e.message : "Couldn't skip that one.", bad: true });
+      setNotice(e instanceof Error ? e.message : "Couldn't skip that one.");
     }
   }
 
   if (error) {
     return (
-      <View style={styles.light}>
-        <View style={{ paddingTop: insets.top + 8, paddingHorizontal: gutter }}>
-          <CircleButton icon="x" label="Close" onPress={goBackOrHome} />
-        </View>
+      <Screen close onBack={goHome}>
         <ErrorState message={error.message} onRetry={() => mutate()} />
-      </View>
+      </Screen>
     );
   }
   if (!scan || !template || !shot) {
     return (
-      <View style={[styles.light, { alignItems: "center", justifyContent: "center" }]}>
-        <ActivityIndicator color={colors.ink} />
-      </View>
+      <Screen close onBack={goHome} scroll={false}>
+        <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+          <ActivityIndicator color={colors.ink} />
+        </View>
+      </Screen>
     );
   }
 
-  const stepState = shots.map((s) => (done.has(s.id) ? "done" : skipped.has(s.id) ? "skipped" : "todo")) as (
-    | "done"
-    | "skipped"
-    | "todo"
-  )[];
-  const checking = phase.kind === "checking";
-  const accepted = phase.kind === "accepted";
-  const previewUri = phase.kind === "live" ? null : phase.uri;
-  const granted = permission?.granted;
-  const guidance = notice?.text ?? shot.prompt;
+  const live = phase.kind === "live";
+  const status =
+    phase.kind === "checking" ? { text: "Checking photo…" } : phase.kind === "accepted" ? { text: "Got it", done: true } : null;
 
   return (
-    <View style={styles.dark}>
-      {granted ? (
-        <CameraView ref={camera} style={StyleSheet.absoluteFill} facing="back" onCameraReady={() => {}} />
-      ) : permission && !permission.granted ? (
-        <PermissionPrompt
-          canAsk={permission.canAskAgain}
-          onAllow={requestPermission}
-          onLibrary={pickFromLibrary}
-        />
-      ) : null}
+    <Screen
+      close
+      onBack={goHome}
+      title={template.title}
+      scroll={false}
+      trailing={
+        <Text variant="label" tone="soft">
+          {index + 1}/{shots.length}
+        </Text>
+      }
+    >
+      <CameraPanel camera={camera} previewUri={live ? null : phase.uri} status={status} onLibrary={live ? library : undefined} />
 
-      {previewUri ? (
-        <Animated.View entering={FadeIn.duration(120)} style={StyleSheet.absoluteFill}>
-          <Image source={{ uri: previewUri }} style={StyleSheet.absoluteFill} contentFit="cover" />
-          <View style={[StyleSheet.absoluteFill, { backgroundColor: "rgba(0,0,0,0.35)" }]} />
+      <Animated.View style={[shakeStyle, { marginTop: 28, minHeight: 96 }]}>
+        <Animated.View key={shot.id} entering={FadeInDown.duration(260)}>
+          <Text variant="title" accessibilityLiveRegion="polite">
+            {scan.followUp && index === 0 ? `${scan.followUp.provider}: ${shot.prompt}` : shot.prompt}
+          </Text>
+          <Text tone={notice ? "danger" : "soft"} style={{ marginTop: 8 }} accessibilityLiveRegion="polite">
+            {notice ?? (index === 0 && !taken.length ? `${shot.tip ?? ""} Keep faces and documents out of the frame.`.trim() : shot.tip)}
+          </Text>
         </Animated.View>
-      ) : null}
-      <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: "white" }, flashStyle]} />
+      </Animated.View>
 
-      {/* Top: close, progress, guidance */}
-      <View style={[styles.top, { paddingTop: insets.top + 8 }]}>
-        <View style={styles.topRow}>
-          <CircleButton icon="x" label="Close" dark onPress={goBackOrHome} />
-          <Glass style={styles.dotsWrap}>
-            <ProgressDots steps={stepState.map((state) => ({ state }))} current={index} dark />
-          </Glass>
-          <View style={{ width: 40 }} />
-        </View>
-        <Animated.View style={[shakeStyle, { marginTop: 18 }]}>
-          <Animated.View key={guidance} entering={FadeInDown.duration(260)}>
-            <Glass style={[styles.guidance, notice?.bad && { backgroundColor: "rgba(199,58,58,0.85)" }]}>
-              <Text variant="bodyStrong" tone="white" style={{ textAlign: "center" }} accessibilityLiveRegion="polite">
-                {guidance}
+      <View style={styles.controls}>
+        <View style={styles.side}>
+          {shot.skipLabel && live ? (
+            <Pressable accessibilityRole="button" accessibilityLabel={`Skip: ${shot.skipLabel}`} onPress={skip} hitSlop={8}>
+              <Text variant="label" tone="soft" style={{ fontSize: 15 }}>
+                Skip
               </Text>
-            </Glass>
-          </Animated.View>
-          <Text variant="caption" style={styles.tip}>
-            {notice?.bad ? "Check the lighting and try again." : shot.tip}
-          </Text>
-        </Animated.View>
-      </View>
-
-      {/* Status over the photo while the vision check runs */}
-      {checking || accepted ? (
-        <Animated.View entering={FadeIn} exiting={FadeOut} style={styles.status} pointerEvents="none">
-          <Glass style={styles.statusPill}>
-            {checking ? <ActivityIndicator color="white" /> : <Icon name="check" size={20} color="white" />}
-            <Text variant="bodyStrong" tone="white">
-              {checking ? "Checking photo…" : "Got it"}
-            </Text>
-          </Glass>
-        </Animated.View>
-      ) : null}
-
-      {/* Bottom: skip, shutter, library */}
-      <View style={[styles.bottom, { paddingBottom: Math.max(insets.bottom, 16) + 8 }]}>
-        {index === 0 && phase.kind === "live" ? (
-          <Text variant="caption" style={styles.privacy}>
-            Keep faces and documents out of the frame.
-          </Text>
-        ) : null}
-        <View style={styles.controls}>
-          <View style={styles.side}>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Choose from library"
-              onPress={pickFromLibrary}
-              disabled={phase.kind !== "live"}
-              style={{ opacity: phase.kind === "live" ? 1 : 0.3 }}
-            >
-              <Glass style={styles.smallBtn}>
-                <Icon name="image" size={20} color="white" />
-              </Glass>
-            </Pressable>
-          </View>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Take photo"
-            onPress={capture}
-            disabled={!granted || phase.kind !== "live"}
-            style={({ pressed }) => [styles.shutter, { opacity: !granted || phase.kind !== "live" ? 0.4 : 1 }, pressed && { transform: [{ scale: 0.94 }] }]}
-          >
-            <View style={styles.shutterInner} />
-          </Pressable>
-          <View style={styles.side} />
-        </View>
-        <View style={{ height: 52, justifyContent: "center", alignItems: "center" }}>
-          {shot.skipLabel && phase.kind === "live" ? (
-            <Pressable onPress={skip} accessibilityRole="button" hitSlop={8}>
-              <Glass style={styles.skip}>
-                <Text variant="label" tone="white">
-                  {shot.skipLabel}
-                </Text>
-              </Glass>
             </Pressable>
           ) : null}
         </View>
+        <Shutter onPress={capture} disabled={!camera.granted || !live || busy} />
+        <View style={[styles.side, styles.thumbs]}>
+          {taken.slice(-2).map((uri) => (
+            <View key={uri} style={[styles.thumb, shadow]}>
+              <Image source={{ uri }} style={StyleSheet.absoluteFill} contentFit="cover" />
+              <View style={styles.thumbCheck}>
+                <Icon name="check" size={13} color={colors.white} />
+              </View>
+            </View>
+          ))}
+        </View>
       </View>
-    </View>
-  );
-}
-
-function PermissionPrompt({
-  canAsk,
-  onAllow,
-  onLibrary,
-}: {
-  canAsk: boolean;
-  onAllow: () => void;
-  onLibrary: () => void;
-}) {
-  return (
-    <View style={[StyleSheet.absoluteFill, styles.permission]}>
-      <View style={styles.permissionIcon}>
-        <Icon name="camera" size={26} color="white" />
-      </View>
-      <Text variant="title" tone="white" style={{ textAlign: "center" }}>
-        Camera access
-      </Text>
-      <Text tone="white" style={{ textAlign: "center", opacity: 0.7 }}>
-        Scope needs your camera to photograph the problem. Photos are only used to scope your job.
-      </Text>
-      <View style={{ gap: 10, alignSelf: "stretch", marginTop: 12 }}>
-        <Button
-          label={canAsk ? "Allow camera" : "Open settings"}
-          onPress={() => (canAsk ? onAllow() : Linking.openSettings())}
-          style={{ backgroundColor: colors.white }}
-        />
-        <Button label="Choose from library" variant="ghost" onDark onPress={onLibrary} />
-      </View>
-    </View>
+    </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  light: { flex: 1, backgroundColor: colors.bg },
-  dark: { flex: 1, backgroundColor: "#111" },
-  top: { position: "absolute", top: 0, left: 0, right: 0, paddingHorizontal: gutter },
-  topRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  dotsWrap: { paddingHorizontal: 14, height: 34, borderRadius: radius.pill, justifyContent: "center", overflow: "hidden" },
-  guidance: {
-    alignSelf: "center",
-    paddingHorizontal: 22,
-    paddingVertical: 14,
-    borderRadius: 26,
-    overflow: "hidden",
-    maxWidth: "100%",
-  },
-  tip: { color: "rgba(255,255,255,0.85)", textAlign: "center", marginTop: 10, paddingHorizontal: 16 },
-  status: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, alignItems: "center", justifyContent: "center" },
-  statusPill: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    paddingHorizontal: 22,
-    paddingVertical: 14,
-    borderRadius: radius.pill,
-    overflow: "hidden",
-  },
-  bottom: { position: "absolute", bottom: 0, left: 0, right: 0, paddingHorizontal: gutter, gap: 14 },
-  privacy: { color: "rgba(255,255,255,0.8)", textAlign: "center" },
-  controls: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  side: { width: 56, alignItems: "flex-start" },
-  smallBtn: { width: 48, height: 48, borderRadius: radius.pill, alignItems: "center", justifyContent: "center", overflow: "hidden" },
-  shutter: {
-    width: 82,
-    height: 82,
-    borderRadius: 41,
-    borderWidth: 4,
-    borderColor: "white",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  shutterInner: { width: 62, height: 62, borderRadius: 31, backgroundColor: "white" },
-  skip: { paddingHorizontal: 18, height: 40, borderRadius: radius.pill, alignItems: "center", justifyContent: "center", overflow: "hidden" },
-  permission: { alignItems: "center", justifyContent: "center", padding: gutter, gap: 12, backgroundColor: "#111" },
-  permissionIcon: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: "rgba(255,255,255,0.12)",
-    alignItems: "center",
-    justifyContent: "center",
-    marginBottom: 8,
-  },
+  controls: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", height: 88, marginTop: 20, marginBottom: 32 },
+  side: { width: 96 },
+  thumbs: { flexDirection: "row", justifyContent: "flex-end", gap: 6 },
+  thumb: { width: 28, height: 38, borderRadius: 9, backgroundColor: colors.card, overflow: "hidden" },
+  thumbCheck: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "rgba(22,21,19,0.45)", alignItems: "center", justifyContent: "center" },
 });

@@ -1,10 +1,11 @@
 import { ActivityIndicator, Pressable, StyleSheet, View, type StyleProp, type ViewStyle } from "react-native";
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from "react-native-reanimated";
-import { colors, radius } from "@/theme";
+import { colors, radius, shadow } from "@/theme";
 import { haptic } from "./haptics";
 import { Icon, type IconName } from "./Icon";
 import { Text } from "./Text";
 
+/** primary: black pill. secondary: white pill. ghost: muted text only ("Not quite", "Skip"). */
 type Variant = "primary" | "secondary" | "ghost" | "danger";
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
@@ -34,7 +35,8 @@ export function Button({
   const scale = useSharedValue(1);
   const animated = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
   const inactive = disabled || loading;
-  const fg = variant === "primary" || onDark ? colors.white : variant === "danger" ? colors.danger : colors.ink;
+  const fg =
+    variant === "primary" || onDark ? colors.white : variant === "danger" ? colors.danger : variant === "ghost" ? colors.inkSoft : colors.ink;
 
   return (
     <AnimatedPressable
@@ -50,9 +52,10 @@ export function Button({
       }}
       style={[
         styles.base,
+        variant === "ghost" && styles.ghost,
         compact && styles.compact,
         variant === "primary" && styles.primary,
-        variant === "secondary" && styles.secondary,
+        variant === "secondary" && [styles.secondary, shadow],
         variant === "danger" && styles.dangerFill,
         disabled && styles.disabled,
         animated,
@@ -63,8 +66,14 @@ export function Button({
         <ActivityIndicator color={fg} />
       ) : (
         <View style={styles.content}>
-          {icon ? <Icon name={icon} size={18} color={fg} /> : null}
-          <Text variant="bodyStrong" style={{ color: fg }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>
+          {icon ? <Icon name={icon} size={20} color={fg} /> : null}
+          <Text
+            variant={variant === "ghost" ? "label" : "bodyStrong"}
+            style={{ color: fg, fontSize: variant === "ghost" ? 16 : 17 }}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.8}
+          >
             {label}
           </Text>
         </View>
@@ -75,16 +84,17 @@ export function Button({
 
 const styles = StyleSheet.create({
   base: {
-    minHeight: 56,
+    minHeight: 64,
     borderRadius: radius.pill,
     paddingHorizontal: 24,
     alignItems: "center",
     justifyContent: "center",
   },
-  compact: { minHeight: 44, paddingHorizontal: 18 },
+  ghost: { minHeight: 52 },
+  compact: { minHeight: 48, paddingHorizontal: 20 },
   primary: { backgroundColor: colors.ink },
-  secondary: { backgroundColor: colors.fill },
+  secondary: { backgroundColor: colors.card },
   dangerFill: { backgroundColor: colors.dangerSoft },
   disabled: { opacity: 0.32 },
-  content: { flexDirection: "row", alignItems: "center", gap: 8 },
+  content: { flexDirection: "row", alignItems: "center", gap: 10 },
 });
