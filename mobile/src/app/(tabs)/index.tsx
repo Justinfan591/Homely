@@ -70,11 +70,17 @@ export default function Home() {
         {next ? "Something else?" : "What needs fixing?"}
       </Text>
       <ServiceGrid fresh />
-      {/* "Type it" is the grid's Other tile; saying it or showing it are the other two ways in. */}
+      {/* Three more ways in under the grid: type it (same as the Other tile), say it, or show it. */}
       <View style={styles.actions}>
-        <Text variant="label" tone="soft">
-          Or tell us
-        </Text>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Type it"
+          disabled={!home}
+          onPress={() => start("type", "/tell/type")}
+          style={({ pressed }) => [styles.round, shadow, pressed && { backgroundColor: colors.fillPressed }]}
+        >
+          <Icon name="message-circle" size={24} />
+        </Pressable>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Tell us what's wrong"

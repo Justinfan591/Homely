@@ -1,7 +1,7 @@
 import { router, useLocalSearchParams } from "expo-router";
 import { useEffect, useState } from "react";
 import { Pressable, View } from "react-native";
-import { ArtOrbit, SlideBar } from "@/components/Design";
+import { ArtOrbit, ProgressBar } from "@/components/Design";
 import { goHome, Screen } from "@/components/Screen";
 import { Text } from "@/components/Text";
 import { useJob } from "@/hooks/data";
@@ -55,7 +55,7 @@ export default function Finding() {
       <Text tone="soft" style={{ marginBottom: 24 }}>
         {invited ? `Asked ${invited} ${invited === 1 ? "pro" : "pros"} nearby. ` : ""}We'll let you know when quotes come in.
       </Text>
-      <SlideBar />
+      <ProgressBar done={offers > 0} />
       {error ? (
         <Text variant="caption" tone="danger" style={{ textAlign: "center", marginTop: 16 }} accessibilityRole="alert">
           {error}
