@@ -11,7 +11,6 @@ import { ErrorState } from "@/components/States";
 import { Text } from "@/components/Text";
 import { moneyRange, SEVERITY_LABELS } from "@/domain/format";
 import type { JobSpec, MatchOption, Scan, Slot, SpecOutcome } from "@/domain/types";
-import { useHome } from "@/hooks/home";
 import { useScan, useSpecOutcome } from "@/hooks/data";
 import { api, ApiError } from "@/services";
 import { getTemplate } from "@/templates";
@@ -275,7 +274,6 @@ function Handoff({ spec }: { spec: JobSpec }) {
 }
 
 function NoProvider({ spec, scanId }: { spec: JobSpec; scanId: string }) {
-  const { home } = useHome();
   const [slots, setSlots] = useState<Slot[] | null>(null);
   const [slotId, setSlotId] = useState<string>();
   const [booking, setBooking] = useState(false);
@@ -324,11 +322,10 @@ function NoProvider({ spec, scanId }: { spec: JobSpec; scanId: string }) {
         <Icon name="map-pin" size={26} />
       </View>
       <Text variant="title" style={{ marginTop: 20 }}>
-        No pros nearby yet
+        No providers nearby
       </Text>
       <Text tone="soft" style={{ marginTop: 8 }}>
-        We couldn't find a qualified pro in range of {home?.name ?? "your home"}. You can walk through the photos with{" "}
-        {provider} on a video call instead.
+        We couldn't find a provider for this job. You can walk through the photos with {provider} on a video call instead.
       </Text>
       <Estimate spec={spec} note="It's confirmed on the call." />
       <View style={{ height: 28 }} />

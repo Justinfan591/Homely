@@ -165,7 +165,7 @@ function Collecting({ job, onChange }: { job: Job; onChange: () => void }) {
               <View style={{ flex: 1 }}>
                 <Text variant="bodyStrong">{o.provider.name}</Text>
                 <Text variant="caption" tone="soft">
-                  ★ {o.provider.rating.toFixed(1)} ({o.provider.reviews}) · {o.distanceKm.toFixed(1)} km away
+                  ★ {o.provider.rating.toFixed(1)} ({o.provider.reviews})
                 </Text>
               </View>
               <View style={{ alignItems: "flex-end" }}>
