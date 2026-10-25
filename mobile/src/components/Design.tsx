@@ -3,6 +3,7 @@ import { useEffect, useRef, type ComponentRef, type ReactNode } from "react";
 import { Pressable, StyleSheet, TextInput, useWindowDimensions, View, type StyleProp, type TextInputProps, type ViewStyle } from "react-native";
 import Animated, {
   Easing,
+  ReduceMotion,
   useAnimatedStyle,
   useReducedMotion,
   useSharedValue,
@@ -105,13 +106,20 @@ function OrbitItem({ t, index, count, size, r, src }: { t: SharedValue<number>; 
 /**
  * The bar under "Finding pros near you.": fills while we wait, quickly at first and then ever slower (pros
  * answer in their own time, so it never claims to be full), and completes once `done` (quotes are in).
+ * It keeps filling with Reduce Motion on: it's the only sign we're still working, and a slow fill isn't the kind
+ * of motion that setting is for. (With the system setting, Reanimated would jump straight to 92% and look stuck.)
  */
 export function ProgressBar({ done }: { done?: boolean }) {
   const p = useSharedValue(0);
   useEffect(() => {
+    const always = ReduceMotion.Never;
     p.value = done
-      ? withTiming(1, { duration: 400 })
-      : withSequence(withTiming(0.6, { duration: 8000, easing: Easing.out(Easing.quad) }), withTiming(0.92, { duration: 60000, easing: Easing.out(Easing.cubic) }));
+      ? withTiming(1, { duration: 400, reduceMotion: always })
+      : withSequence(
+          always,
+          withTiming(0.6, { duration: 8000, easing: Easing.out(Easing.quad), reduceMotion: always }),
+          withTiming(0.92, { duration: 60000, easing: Easing.out(Easing.cubic), reduceMotion: always }),
+        );
   }, [p, done]);
   const style = useAnimatedStyle(() => ({ width: `${p.value * 100}%` }));
   return (
