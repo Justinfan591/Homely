@@ -15,7 +15,7 @@ import path from "node:path";
 import zlib from "node:zlib";
 import { inArray, eq } from "drizzle-orm";
 import { createScopeClient, ScopeApiError, type ScopeClient } from "../shared/scope-client";
-import { HANDOFF_CONFIDENCE, PROFILE_MAX_QUESTIONS, PROFILE_MIN_QUESTIONS, pricingFromRateCard, quote, rateCardFromPricing, suggestedQuote, PRICE_ADJUST_MAX, type ProProfile, type ProProvider, type ScanResponse, type Template } from "../shared/scope";
+import { HANDOFF_CONFIDENCE, PROFILE_MAX_QUESTIONS, PROFILE_MIN_QUESTIONS, quote, toRateCard, type ProProfile, type ProProvider, type ProviderPricing, type Question, type ScanResponse, type Template, type WeekHours } from "../shared/scope";
 
 const BASE = (process.env.E2E_BASE_URL ?? "http://localhost:3000").replace(/\/+$/, "");
 const KEEP = process.argv.includes("--keep");
@@ -46,6 +46,14 @@ function aiCheck(cond: unknown, what: string) {
   if (!cond) {
     warnings++;
     console.log(`    ! warning (real AI): ${what}`);
+  }
+}
+/** For checks that need an outside service (Photon address search): warn when it's unreachable. */
+function netCheck(cond: unknown, what: string) {
+  checks++;
+  if (!cond) {
+    warnings++;
+    console.log(`    ! warning (outside service): ${what}`);
   }
 }
 async function rejects(p: Promise<unknown>, status: number, what: string) {
@@ -114,9 +122,9 @@ let token = "";
 let byName: Record<string, ProProvider> = {};
 const pro = (name: string) => api.pro(byName[name].id);
 
-/** First option for every required question (optional ones left blank). */
-const answersFor = (t: Template, only?: string[]) =>
-  Object.fromEntries(t.questions.filter((q) => (only ? only.includes(q.id) : !q.optional)).map((q) => [q.id, q.options[0]]));
+/** First option for every required question (optional ones left blank). Takes a template or a question list. */
+const answersFor = (t: Template | Question[], only?: string[]) =>
+  Object.fromEntries((Array.isArray(t) ? t : t.questions).filter((q) => (only ? only.includes(q.id) : !q.optional)).map((q) => [q.id, q.options[0]]));
 
 /** Captures the two key shots with real-looking photos and skips the optional ones. */
 async function capture(scanId: number) {
@@ -134,18 +142,25 @@ async function capture(scanId: number) {
 /** Start → capture → answer → spec. Returns the scan once the spec is ready (or handed off). */
 async function scanToSpec(trade = "mold", notes: string | null = "Behind the bathroom door.") {
   const { id } = await api.homeowner.startScan(trade);
-  const s = await capture(id);
-  return api.homeowner.finish(id, answersFor(s.template), notes);
+  await capture(id);
+  const { questions } = await api.homeowner.questions(id);
+  return api.homeowner.finish(id, answersFor(questions), notes);
 }
 
 /** A request open to every matching pro, or null if real Claude handed it off for low confidence. */
-async function openRequest() {
+/** An open mold request. The flows below act as Mold Busters, so with real AI it's skipped if the matching agent left them out. */
+async function openRequest(slot?: string) {
   const s = await scanToSpec();
   if (s.scan.status !== "spec_ready") {
-    aiCheck(false, `spec confidence ${s.spec?.confidence} — expected ≥ ${HANDOFF_CONFIDENCE}`);
+    aiCheck(false, `spec ready (got ${s.scan.status})`);
     return null;
   }
-  const opened = await api.homeowner.requestOffers(s.scan.id);
+  const opened = await api.homeowner.requestOffers(s.scan.id, slot);
+  if (!(await inTab("Mold Busters", "new", opened.job!.id))) {
+    aiCheck(false, "the matching agent invited Mold Busters; rest of this flow skipped");
+    await api.homeowner.cancel(s.scan.id);
+    return null;
+  }
   return { scanId: s.scan.id, jobId: opened.job!.id };
 }
 
@@ -184,7 +199,10 @@ async function main() {
     }
   }
   const profiles = localProfiles();
-  const snapshot = providers.map((p) => ({ id: p.id, rating: p.rating, ratingCount: p.ratingCount, rateCard: p.rateCard, description: p.description, profile: profiles?.get(p.id) ?? null }));
+  const snapshot = providers.map((p) => {
+    const local = profiles?.get(p.id);
+    return { id: p.id, rating: p.rating, ratingCount: p.ratingCount, rateCard: local?.rateCard ?? p.rateCard, description: p.description, profile: local?.profile ?? null, pricing: local?.pricing ?? null, hours: local?.hours ?? null };
+  });
   const email = `e2e-${Date.now()}@scope.test`;
   const userIds: number[] = [];
 
@@ -202,7 +220,29 @@ async function main() {
       check(h1.home.address === "1 Test Street", "home saved");
       const { templates } = await api.homeowner.templates();
       check(["mold", "plumbing_sink"].every((t) => templates.some((x) => x.trade === t)), "mold and plumbing_sink templates ship");
-      await rejects(api.homeowner.startScan("roofing"), 404, "unknown trade");
+      await rejects(api.homeowner.startScan("chimney_sweep"), 404, "unknown trade");
+    });
+
+    await flow("Address type-ahead; a picked suggestion's coordinates are saved as-is", async () => {
+      check((await api.homeowner.searchAddresses("10")).suggestions.length === 0, "no search under 3 characters");
+      const { suggestions } = await api.homeowner.searchAddresses("1000 rue Sherbrooke");
+      check(Array.isArray(suggestions) && suggestions.length <= 5, "at most 5 suggestions");
+      netCheck(suggestions.length > 0, "Photon finds 1000 rue Sherbrooke");
+      for (const x of suggestions) check(x.address && x.line1 && Number.isFinite(x.lat) && Number.isFinite(x.lng), `suggestion is complete: ${JSON.stringify(x)}`);
+      netCheck(suggestions.some((x) => /montr[eé]al/i.test(x.address)), `the Montreal one leads (near the home): ${suggestions.map((x) => x.address).join(" | ")}`);
+      check(new Set(suggestions.map((x) => x.address.toLowerCase())).size === suggestions.length, "no duplicate suggestions");
+
+      // Picked: saved where the suggestion is, not re-geocoded.
+      const pick = { address: "Somewhere Picked, Test City", lat: CENTER.lat + 0.01, lng: CENTER.lng - 0.01 };
+      await api.homeowner.updateProfile(pick);
+      let h = (await api.homeowner.home()).home!;
+      check(h.address === pick.address && h.lat === pick.lat && h.lng === pick.lng, "picked address keeps its coordinates");
+      // Same address, new coordinates (e.g. "Use my current location"): still updated. Back to the test centre.
+      await api.homeowner.updateProfile({ address: pick.address, ...CENTER });
+      h = (await api.homeowner.home()).home!;
+      check(h.lat === CENTER.lat && h.lng === CENTER.lng, "same address with new coordinates moves the home");
+      check((await raw("/api/geocode/search?q=main+street")).status === 401, "search needs a signed-in homeowner");
+      await api.homeowner.updateProfile({ address: "1 Test Street", ...CENTER });
     });
 
     await flow("Happy path: scan → retake → skip → questions → spec → request → offers → accept → en route → done → rate", async () => {
@@ -225,17 +265,28 @@ async function main() {
       check(s.remainingShots.length === 0, "no shots left");
       check(s.scan.skippedShots.length === s.template.required_shots.filter((x) => x.optional).length, "optional shots recorded as skipped");
 
-      // Questions.
-      await rejects(api.homeowner.finish(id, {}), 400, "missing answers");
-      await rejects(api.homeowner.finish(id, { ...answersFor(s.template), smell: "x".repeat(201) }), 400, "own-words answer over 200 characters");
-      s = await api.homeowner.finish(id, answersFor(s.template), "Behind the bathroom door.");
+      // Questions: the questions agent writes them once (fake AI: the template's), and they're stored.
+      const { questions } = await api.homeowner.questions(id);
+      check(questions.length <= Math.max(5, s.template.questions.length), "at most 5 agent questions (or the template's list)");
+      check(new Set(questions.map((q) => q.id)).size === questions.length && questions.every((q) => q.q && q.options.length >= 2), "questions have unique ids and at least 2 options");
+      if (fake) check(JSON.stringify(questions.map((q) => q.id)) === JSON.stringify(s.template.questions.map((q) => q.id)), "fake AI: questions are the template's");
+      const again = await api.homeowner.questions(id);
+      check(JSON.stringify(again.questions) === JSON.stringify(questions), "questions are written once, then stored");
+      check(JSON.stringify((await api.homeowner.scan(id)).scan.questions) === JSON.stringify(questions), "scan response carries the questions");
+      if (questions.some((q) => !q.optional)) await rejects(api.homeowner.finish(id, {}), 400, "missing answers");
+      if (questions.length) {
+        await rejects(api.homeowner.finish(id, { ...answersFor(questions), [questions[0].id]: "x".repeat(201) }), 400, "own-words answer over 200 characters");
+      }
+      s = await api.homeowner.finish(id, answersFor(questions), "Behind the bathroom door.");
       if (s.scan.status !== "spec_ready") {
         aiCheck(false, `spec confidence ${s.spec?.confidence} — expected ≥ ${HANDOFF_CONFIDENCE}; rest of flow skipped`);
         return;
       }
       const spec = s.spec!;
       check(spec.version === 1 && spec.severity >= 1 && spec.severity <= 5 && spec.areaM2 >= 0, "spec v1 with severity 1-5 and an area");
-      check(spec.confidence >= HANDOFF_CONFIDENCE && spec.confidence <= 1, "confidence in [0.6, 1]");
+      check(spec.confidence >= 0 && spec.confidence <= 1, "confidence in [0, 1]");
+      // Low confidence no longer stops the flow (the homeowner still gets a price); the test photos just aren't real.
+      aiCheck(spec.confidence >= HANDOFF_CONFIDENCE, `confidence ${spec.confidence} ≥ ${HANDOFF_CONFIDENCE}`);
       check(s.template.outputs.filter((k) => k !== "severity" && k !== "affected_area_m2").every((k) => typeof spec.fields[k] === "string"), "every template output field filled");
       aiCheck(spec.summary.toLowerCase().includes("testing recommended"), `summary uses the policy wording ("${spec.summary.slice(0, 80)}…")`);
       check(!/\$\d/.test(spec.summary + spec.title), "the AI text contains no prices");
@@ -248,18 +299,20 @@ async function main() {
       check(names.includes("Mold Busters") && names.includes("ClearSpore Remediation"), `in-range mold pros match (${names.join(", ")})`);
       check(!names.includes("Northshore Mold Co"), "out-of-range pro is filtered out");
       check(!names.some((n) => n.includes("Plumbing") || n.includes("Pipeline")), "other trades are filtered out");
-      check(s.matches.every((m, i) => i === 0 || s.matches[i - 1].rating >= m.rating), "ranked by rating");
+      // Without the matching agent (fake AI) pros are ranked by rating; with it, by how well they fit.
+      if (fake) check(s.matches.every((m, i) => i === 0 || s.matches[i - 1].rating >= m.rating), "ranked by rating");
+      check(spec.hours != null && spec.hours > 0 && spec.partsCost != null && spec.partsCost >= 0 && !!spec.complexity, `spec estimates the work (${spec.hours} h, ${spec.complexity}, CA$${spec.partsCost} parts)`);
+      if (fake) check(spec.hours === 2 && spec.partsCost === 40 && spec.complexity === "medium", "fake spec: 2 h, CA$40 parts, medium");
       for (const m of s.matches) {
-        // Fake pricing agent: +10% on every pro's formula price.
-        const card = byName[m.name].rateCard;
-        const want = suggestedQuote(card, spec, 10);
-        aiCheck(m.quote.price === want.price && m.quote.low === want.low && m.quote.high === want.high, `${m.name} quote = rate card formula + agent's 10%`);
-        const lo = suggestedQuote(card, spec, -PRICE_ADJUST_MAX).price, hi = suggestedQuote(card, spec, PRICE_ADJUST_MAX).price;
-        check(m.quote.price >= lo && m.quote.price <= hi, `${m.name} suggestion stays within ±${PRICE_ADJUST_MAX}% of the formula ($${m.quote.price})`);
+        // Each pro's price = their rates × the spec's hours and parts (code, no agent).
+        const card = toRateCard(byName[m.name].rateCard);
+        const want = quote(card, spec);
+        check(m.quote.price === want.price && m.quote.low === want.low && m.quote.high === want.high, `${m.name} quote = call-out + extra hours + parts (CA$${m.quote.price})`);
+        check(m.quote.price === m.quote.callOut + m.quote.extra + m.quote.parts, `${m.name} breakdown adds up`);
         check(m.slots.length === 3 && m.slots.every((x) => new Date(x.startsAt).getTime() > Date.now()), `${m.name} offers 3 future slots`);
         check(m.etaMinutes > 0 && m.distanceKm >= 0, `${m.name} has distance and ETA`);
       }
-      check(spec.priceLow === s.matches[0].quote.low && spec.priceHigh === s.matches[0].quote.high, "spec range priced for the top match");
+      check(spec.priceLow === s.matches[0].quote.low && spec.priceHigh === s.matches[0].quote.high && spec.priceBasis === null, "spec range priced for the top match");
 
       // Photos: signed src works alone; url needs the token; pros only see their jobs.
       const photo = s.photos.find((p) => p.ok)!;
@@ -293,11 +346,15 @@ async function main() {
       await rejects(pro("Clearwater Plumbing").job(jobId), 404, "other trade can't open it");
       let d = await pro("Mold Busters").job(jobId);
       check(d.photos.length >= 2 && d.photos.every((p) => p.ok), "pro sees the usable photos only");
-      check(d.answers.length === s.template.questions.filter((x) => !x.optional).length, "pro sees readable answers");
+      const answered = Object.keys(answersFor(questions));
+      check(d.answers.length === answered.length && answered.every((id) => d.answers.some((a) => a.id === id && a.q)), `pro sees readable answers to the questions asked (${d.answers.length})`);
       check(d.home.address !== "1 Test Street", "address hidden until the homeowner picks");
-      aiCheck(d.priceReason === "Test suggestion.", "pro sees the pricing agent's reason");
-      check(d.quote.price === quoted.find((m) => m.name === "Mold Busters")?.quote.price, "pro's suggested price = the homeowner-side quote");
-      check((await pro("Mold Busters").queue()).tabs.new.find((c) => c.jobId === jobId)?.priceReason === d.priceReason, "queue card carries the same reason");
+      check(d.quote.price === quoted.find((m) => m.name === "Mold Busters")?.quote.price, "pro's price = the homeowner-side quote");
+      check(d.quote.callOut === toRateCard(mb.rateCard).callOut && d.quote.hours === spec.hours, "pro sees the estimate breakdown (call-out, hours)");
+      check(!!d.client && !d.client.includes(" "), `pro sees only the homeowner's first name before booking ("${d.client}")`);
+      const qcard = (await pro("Mold Busters").queue()).tabs.new.find((c) => c.jobId === jobId);
+      check(qcard?.quote.price === d.quote.price && qcard.needsApproval === d.needsApproval, "queue card carries the same price");
+      check(s.offers.length === 0, "no automatic offers without approved pricing");
       check((await raw(d.photos[0].src)).status === 200, "pro's signed photo src loads");
       await rejects(pro("Mold Busters").accept(jobId, { slot: d.slots[0].startsAt, price: d.quote.price }), 409, "can't take an open request directly");
 
@@ -416,12 +473,16 @@ async function main() {
     await flow("Human handoff → Needs review → route to a virtual call → accept → done", async () => {
       let s = await scanToSpec();
       if (s.scan.status === "spec_ready") s = await api.homeowner.askForHuman(s.scan.id);
-      check(s.job?.status === "handoff" && s.job.provider?.name === "Mold Busters", "handed off to Mold Busters' review");
-      const jobId = s.job.id;
-      check(await inTab("Mold Busters", "review", jobId), "in the Needs review tab");
+      // The top-matched pro reviews it (which pro depends on the matching agent with real AI).
+      const reviewer = s.job?.provider?.name ?? "";
+      check(s.job?.status === "handoff" && ["Mold Busters", "ClearSpore Remediation", "Justin Fan"].includes(reviewer), `handed off to an in-range mold pro's review (${reviewer})`);
+      aiCheck(reviewer === "Mold Busters", "Mold Busters reviews it");
+      const jobId = s.job!.id;
+      check(await inTab(reviewer, "review", jobId), "in the Needs review tab");
       await rejects(api.homeowner.askForHuman(s.scan.id), 409, "handing off twice");
-      const d = await pro("Mold Busters").routeToVirtualCall(jobId);
-      check(d.job.status === "virtual_call" && d.job.mode === "virtual", "routed to a virtual call");
+      // Routing hands it to the trade's virtual-call partner (Mold Busters), whoever reviewed it.
+      const d = await pro(reviewer).routeToVirtualCall(jobId);
+      check(d.job.status === "virtual_call" && d.job.mode === "virtual" && d.job.provider?.name === "Mold Busters", "routed to Mold Busters' virtual call");
       s = await api.homeowner.scan(s.scan.id);
       check(s.job?.status === "virtual_call", "phone shows the virtual call");
       await pro("Mold Busters").accept(jobId, { slot: d.slots[0].startsAt, price: d.quote.price });
@@ -430,12 +491,13 @@ async function main() {
     });
 
     if (fake) {
-      await flow("Low confidence (< 0.6) hands off automatically with the spec attached", async () => {
+      await flow("Low confidence (< 0.6) still gets a price and pros (no automatic handoff)", async () => {
         const s = await scanToSpec("mold", "handoff: hard to see");
         check(s.spec!.confidence < HANDOFF_CONFIDENCE, "spec confidence below 0.6");
-        check(s.scan.status === "submitted" && s.job?.status === "handoff", "job went straight to handoff");
-        check(s.matches.length === 0, "no booking offered");
-        check(await inTab("Mold Busters", "review", s.job.id), "in the Needs review tab");
+        check(s.scan.status === "spec_ready" && !s.job, "no automatic handoff: the homeowner can book");
+        check(s.matches.length > 0, "pros are offered");
+        check(s.spec!.priceLow != null && s.spec!.priceHigh != null && s.spec!.priceLow <= s.spec!.priceHigh, "a price is shown");
+        check(s.spec!.hours != null && s.spec!.partsCost != null, "the estimate is there even when unsure");
       });
     }
 
@@ -444,7 +506,9 @@ async function main() {
       try {
         let s = await scanToSpec();
         if (s.scan.status !== "spec_ready") return aiCheck(false, "low confidence; skipped");
-        check(s.matches.length === 0 && s.spec?.priceLow === null, "no matches, no price");
+        check(s.matches.length === 0, "no matches");
+        const sp = s.spec!;
+        check(sp.priceLow != null && sp.priceHigh != null && sp.priceLow >= 50 && sp.priceLow <= sp.priceHigh && !!sp.priceBasis, `best-guess estimate with a basis ($${sp.priceLow}-$${sp.priceHigh}: ${sp.priceBasis})`);
         await rejects(api.homeowner.requestOffers(s.scan.id), 409, "requesting offers with nobody in range");
         s = await api.homeowner.requestVirtualCall(s.scan.id);
         check(s.job?.status === "virtual_call" && s.job.mode === "virtual" && s.job.provider?.name === "Mold Busters", "virtual call with Mold Busters");
@@ -454,11 +518,11 @@ async function main() {
       }
     });
 
-    await flow("Profile interview ends in pricing, which reprices immediately; homeowner cancels", async () => {
+    await flow("Profile interview, then pricing chat → approve → reprices and sends offers itself; homeowner cancels", async () => {
       const b = await openRequest();
       if (!b) return;
       const mb = pro("Mold Busters");
-      const { rateCard: original, website: originalSite } = await mb.profile();
+      const { website: originalSite } = await mb.profile();
       try {
         await rejects(mb.profileAction({ action: "website", url: "localhost:3000" }), 400, "local website address rejected");
         const w = await mb.profileAction({ action: "website", url: "example.com" });
@@ -466,7 +530,6 @@ async function main() {
         let v = await mb.profileAction({ action: "start" });
         check(v.status === "in_progress" && v.profile?.stage === "interview" && v.profile.pending, "interview starts with a question");
         check(!(await mb.queue()).provider.profileFacts, "no profile facts until finished");
-        await rejects(mb.profileAction({ action: "pricing", pricing: { callOut: 1, perM2: 1, severePct: 0 } }), 409, "no pricing before the questions");
         await rejects(mb.profileAction({ action: "answer", answer: ["not an option"] }), 400, "answer must be one of the options");
         await rejects(mb.profileAction({ action: "answer", answer: [] }), 400, "empty answer (use skip)");
         let asked = 0;
@@ -476,29 +539,82 @@ async function main() {
           v = asked === 1 ? await mb.profileAction({ action: "skip" }) : await mb.profileAction({ action: "answer", answer: [q.options[0]], note: asked === 0 ? "Attics too" : null });
           asked++;
         }
-        check(v.profile?.stage === "pricing", `questions end in the pricing step (${asked} asked)`);
+        check(v.profile?.stage === "complete", `questions end with a complete profile (${asked} asked)`);
         check(asked >= PROFILE_MIN_QUESTIONS && asked <= PROFILE_MAX_QUESTIONS, `between ${PROFILE_MIN_QUESTIONS} and ${PROFILE_MAX_QUESTIONS} questions`);
         if (fake) check(asked === 4, "fake AI asks 4 questions");
         check(v.profile.turns[0].note === "Attics too" && v.profile.turns[1].answer.length === 0, "answers, notes and skips are kept");
         check(v.profile.facts && v.profile.facts.specialties.length > 0 && v.profile.draftDescription, "agent wrote facts and a summary");
-        check(v.status === "in_progress", "still in progress until prices are saved");
-
-        await rejects(mb.profileAction({ action: "pricing", pricing: { callOut: -1, perM2: 50, severePct: 0 } }), 400, "negative price rejected");
-        const pricing = { callOut: 200, perM2: 50, severePct: 0 };
-        v = await mb.profileAction({ action: "pricing", pricing });
         check(v.status === "complete" && v.description === v.profile?.draftDescription, "profile complete; summary saved for matching");
         check((await mb.queue()).provider.profileFacts?.specialties.length, "queue reports the profile facts");
-        const card = rateCardFromPricing(pricing);
-        check(JSON.stringify(v.rateCard) === JSON.stringify(card), "rate card built from the pricing answers");
+
+        // Pricing chat: the pro says how they charge; the agent drafts the rates; approve makes them live.
+        let pr: ProviderPricing = await mb.pricing();
+        check(pr.status === "draft" && pr.messages[0]?.who === "agent" && pr.asks.length > 0, "pricing chat opens with the agent's question and draft asks");
+        await rejects(mb.pricingMessage(""), 400, "empty message");
+        pr = await mb.pricingMessage("CA$200 call-out with the first hour, then CA$100 an hour. Parts at cost plus 20%. Up to CA$900 without asking me.");
+        check(pr.messages.length === 3 && pr.messages.at(-1)?.who === "agent", "agent replied");
+        aiCheck(pr.draft.callOut === 200 && pr.draft.hourly === 100 && pr.draft.partsMarkupPct === 20 && pr.draft.approveOver === 900, `draft rates parsed (${JSON.stringify(pr.draft)})`);
+        check((await mb.job(b.jobId)).quote.callOut === toRateCard(byName["Mold Busters"].rateCard).callOut, "the draft isn't used until approved");
+        pr = await mb.approvePricing();
+        check(pr.status === "live" && !!pr.approvedAt, "approved: pricing is live");
+        const card = toRateCard((await mb.queue()).provider.rateCard);
+        check(JSON.stringify(card) === JSON.stringify(pr.draft), "approved draft is now the rate card");
         const d = await mb.job(b.jobId);
-        const want = suggestedQuote(card, d.spec, fake ? 10 : 0);
-        aiCheck(d.quote.price === want.price, `detail quote follows the new prices, agent adjustment kept ($${d.quote.price})`);
+        check(d.quote.price === quote(card, d.spec).price && d.quote.callOut === card.callOut, `detail quote follows the new rates (CA$${d.quote.price})`);
         check((await mb.queue()).tabs.new.find((c) => c.jobId === b.jobId)?.quote.price === d.quote.price, "queue card matches the detail price");
-        v = await mb.profileAction({ action: "pricing", pricing: { ...pricing, perM2: 60 } });
-        check(v.rateCard.per_m2 === 60 && v.status === "complete", "prices can be edited after finishing");
+
+        // Working hours: offers only fall inside them.
+        const mornings: WeekHours = Array.from({ length: 7 }, (_, i) => Array.from({ length: 48 }, (_, j) => i < 6 && j >= 18 && j < 24));
+        const h = await mb.setHours(mornings);
+        check(h.hours[0][18] === true && h.hours[0][30] === false, "working hours saved");
+        await rejects(mb.setHours([[true]] as WeekHours), 400, "malformed hours rejected");
+
+        // The agent sends offers itself on new requests under the limit, inside working hours.
+        const c = await openRequest();
+        if (c) {
+          const offer = (await api.homeowner.scan(c.scanId)).offers.find((o) => o.provider.name === "Mold Busters");
+          const q = (await mb.job(c.jobId)).quote;
+          check(!!offer && offer.byAgent && offer.price === q.price, `agent sent Mold Busters' offer at the quote (CA$${offer?.price})`);
+          const at = offer ? new Date(offer.slot) : null;
+          check(!!at && at.getHours() >= 9 && at.getHours() < 12 && at.getDay() !== 0, `agent's offer is inside working hours (${at?.toString()})`);
+          check(!(await api.homeowner.scan(c.scanId)).offers.some((o) => o.provider.name === "ClearSpore Remediation"), "pros without approved pricing don't get automatic offers");
+          await api.homeowner.cancel(c.scanId);
+        }
+        // The homeowner's preferred time: used when the pro is free then, else their next free time after it.
+        const day = (n: number, hour: number) => {
+          const d = new Date();
+          d.setDate(d.getDate() + n);
+          if (d.getDay() === 0) d.setDate(d.getDate() + 1);
+          d.setHours(hour, 0, 0, 0);
+          return d;
+        };
+        const inHours = day(3, 9);
+        const f = await openRequest(inHours.toISOString());
+        if (f) {
+          const at = new Date((await api.homeowner.scan(f.scanId)).offers.find((o) => o.provider.name === "Mold Busters")?.slot ?? 0);
+          aiCheck(at.getTime() === inHours.getTime(), `agent's offer is at the homeowner's time when the pro is free (${at.toString()})`);
+          await api.homeowner.cancel(f.scanId);
+        }
+        const afterHours = day(2, 14);
+        const g = await openRequest(afterHours.toISOString());
+        if (g) {
+          const at = new Date((await api.homeowner.scan(g.scanId)).offers.find((o) => o.provider.name === "Mold Busters")?.slot ?? 0);
+          check(at.getTime() >= afterHours.getTime(), `outside working hours: the offer is after the homeowner's time, not before it (${at.toString()})`);
+          aiCheck(at.getHours() === 9 && at.getTime() - afterHours.getTime() < 2 * 24 * 3600_000, `…at the start of the pro's next morning (${at.toString()})`);
+          await api.homeowner.cancel(g.scanId);
+        }
+        // Over the limit: the agent leaves it to the pro.
+        await mb.pricingMessage("Send me anything over CA$50.");
+        pr = await mb.approvePricing();
+        aiCheck(pr.draft.approveOver === 50, `limit lowered to CA$50 (${pr.draft.approveOver})`);
+        const e = await openRequest();
+        if (e && pr.draft.approveOver === 50) {
+          check(!(await api.homeowner.scan(e.scanId)).offers.some((o) => o.provider.name === "Mold Busters"), "over the limit: no automatic offer");
+          check((await mb.queue()).tabs.new.find((x) => x.jobId === e.jobId)?.needsApproval === true, "queue flags it as over the limit");
+        }
+        if (e) await api.homeowner.cancel(e.scanId);
       } finally {
-        // Exact rate card and profile come back in cleanup() (local server).
-        await mb.profileAction({ action: "pricing", pricing: pricingFromRateCard(original) }).catch(() => {});
+        // Exact rate card, pricing, hours and profile come back in cleanup() (local server).
         await mb.profileAction({ action: "website", url: originalSite ?? "" }).catch(() => {});
       }
       const cs = pro("ClearSpore Remediation");
@@ -561,7 +677,7 @@ async function main() {
 }
 
 /** Deletes the throwaway homeowners' data and restores provider ratings, rate cards and profiles. Local server only. */
-type ProviderSnapshot = { id: number; rating: number; ratingCount: number; rateCard: ProProvider["rateCard"]; description: string | null; profile: ProProfile | null };
+type ProviderSnapshot = { id: number; rating: number; ratingCount: number; rateCard: ProProvider["rateCard"]; description: string | null; profile: ProProfile | null; pricing: ProviderPricing | null; hours: WeekHours | null };
 
 const isLocal = () => /localhost|127\.0\.0\.1/.test(BASE) && fs.existsSync(path.join(process.cwd(), "data", "molsters.db"));
 
@@ -570,7 +686,7 @@ function localProfiles() {
   if (!isLocal()) return null;
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { db, schema: t } = require("../db/index") as typeof import("../db/index");
-  return new Map(db.select().from(t.providers).all().map((p) => [p.id, p.profile]));
+  return new Map(db.select().from(t.providers).all().map((p) => [p.id, { profile: p.profile, pricing: p.pricing, hours: p.hours, rateCard: p.rateCard }]));
 }
 
 function cleanup(userIds: number[], snapshot: ProviderSnapshot[]) {
@@ -596,10 +712,10 @@ function cleanup(userIds: number[], snapshot: ProviderSnapshot[]) {
     }
     if (homeIds.length) tx.delete(t.homes).where(inArray(t.homes.id, homeIds)).run();
     tx.delete(t.users).where(inArray(t.users.id, userIds)).run();
-    for (const p of snapshot) tx.update(t.providers).set({ rating: p.rating, ratingCount: p.ratingCount, rateCard: p.rateCard, description: p.description, profile: p.profile }).where(eq(t.providers.id, p.id)).run();
+    for (const p of snapshot) tx.update(t.providers).set({ rating: p.rating, ratingCount: p.ratingCount, rateCard: p.rateCard, description: p.description, profile: p.profile, pricing: p.pricing, hours: p.hours }).where(eq(t.providers.id, p.id)).run();
   });
   for (const id of scanIds) fs.rmSync(path.join(process.cwd(), "uploads", `scan-${id}`), { recursive: true, force: true });
-  console.log(`\nCleaned up ${scanIds.length} test scans and restored provider ratings, rate cards and profiles.`);
+  console.log(`\nCleaned up ${scanIds.length} test scans and restored provider ratings, rates, pricing chats, hours and profiles.`);
 }
 
 main().catch((err) => {

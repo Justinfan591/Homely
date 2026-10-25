@@ -7,7 +7,7 @@
   "required_shots": [
     { "id": "appliance_front", "prompt": "Show the whole appliance", "tip": "From the front, door closed.", "hint": "The full appliance from the front." },
     { "id": "problem_closeup", "prompt": "Show the problem", "tip": "An error code, a leak, a broken part.", "hint": "A close-up of the error display, leak, damage or broken part." },
-    { "id": "model_label", "prompt": "Show the model label", "tip": "Usually inside the door or on the back.", "hint": "The brand/model/serial sticker, readable.", "optional": true, "skip_label": "I can't find it" }
+    { "id": "model_label", "prompt": "Show the sticker with the model number", "tip": "Usually inside the door or on the back.", "hint": "The brand/model/serial sticker, readable.", "optional": true, "skip_label": "I can't find it" }
   ],
   "questions": [
     { "id": "appliance", "q": "Which appliance?", "options": ["Fridge or freezer", "Washer or dryer", "Dishwasher", "Oven or stove"] },

@@ -19,9 +19,11 @@ Enter any phone number or email, then the code **7246**. Nothing is sent: the se
 
 ## The flow
 
-1. **Home** shows the service tiles: tap one to go straight to its guided photos, or **Other** to type the problem ("Describe your issue", then Claude picks the trade). Locksmith has no tile; voice and Other still reach it. "Or tell us what's wrong" records your voice (`expo-audio`). The server transcribes it with OpenAI (`OPENAI_API_KEY`; `SCOPE_FAKE_AI=1` returns a fixed sentence).
-2. **Show us**: one screening photo. Claude picks the trade from what you said and the photo ("It sounds like Plumbing"). "Not quite" opens the same service tiles.
-3. **Guided photos** from the trade's template, each checked by the vision model; then drag a dot onto the problem. Mold also offers "Can't see it? Describe it instead" (`describe/[scanId]`): symptoms and where instead of photos, which the spec agent scores low-confidence so it goes to specialist review.
+1. **Home**: the service tiles first. A tile goes straight to that trade's guided photos; **Other** is "Type it" ("Describe your issue. We'll match you to a professional."). Under the grid, two more ways in:
+   - **"Tell us what's wrong"** (mic): talk. The recording (`expo-audio`) is transcribed on the server with OpenAI (`OPENAI_API_KEY`; `SCOPE_FAKE_AI=1` returns a fixed sentence).
+   - **Camera button**: take one photo.
+2. **Is this right?** Claude suggests the problem ("It looks like / It sounds like Plumbing") with two alternative chips. One tap starts it; "Something else" opens the same service tiles.
+3. **Guided photos** from the trade's template, each checked by the vision model. A photo from the camera path is reused as the shot it matches, so the guided camera starts at the next one. Then drag a dot onto the problem. Mold also offers "Can't see it? Describe it instead" (`describe/[scanId]`): symptoms and where, instead of photos. The spec is still priced, flagged low confidence for the pro.
 4. **Questions** one at a time ("Something else? Write it" for your own words), then an optional note.
 5. **When works for you?**: a day and window. The estimate is made in the background; "Find pros" sends it to every matching pro.
 6. **Finding pros** → **Quotes** as pros answer on `/pro` → tap one → **You're booked**.

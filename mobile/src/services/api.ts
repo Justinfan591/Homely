@@ -1,10 +1,12 @@
 import type {
+  AddressSuggestion,
   Classification,
   Home,
   Job,
   JobSpec,
   PhotoVerdict,
   Profile,
+  Question,
   ProfileUpdate,
   RecordItem,
   Review,
@@ -53,6 +55,11 @@ export interface ScopeApi {
   /** Which trade the description (and optional screening photo) is about. */
   classify(text: string, photoUri?: string | null): Promise<Classification>;
 
+  /** Coordinates → a street address, for when the phone can't look it up itself (e.g. on web). */
+  reverseGeocode(lat: number, lng: number): Promise<string | null>;
+  /** Address type-ahead: up to 5 suggestions for what they've typed (empty under 3 characters). */
+  searchAddresses(query: string): Promise<AddressSuggestion[]>;
+
   listHomes(): Promise<Home[]>;
   /** The Home Record: scans and jobs for one home, newest first. */
   listRecord(homeId: string): Promise<RecordItem[]>;
@@ -68,6 +75,11 @@ export interface ScopeApi {
   describeInstead(scanId: string, description: string): Promise<Scan>;
   /** "Move the dot to the leak": x and y in % of the photo. */
   markPhoto(scanId: string, shotId: string, x: number, y: number): Promise<Scan>;
+  /**
+   * The follow-up questions for this scan: written by the questions agent from what the homeowner said
+   * and photographed, or just the ones a pro asked for. Can take a few seconds the first time.
+   */
+  getQuestions(scanId: string): Promise<Question[]>;
   submitAnswers(scanId: string, answers: Record<string, string>, note: string): Promise<Scan>;
 
   /** Builds (or returns) the JobSpec, priced and matched. May hand off to a human or offer a virtual call. */

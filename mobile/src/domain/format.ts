@@ -1,7 +1,7 @@
 import type { PriceRange } from "./types";
 
 export function money(n: number) {
-  return `$${Math.round(n).toLocaleString("en-CA")}`;
+  return `CA$${Math.round(n).toLocaleString("en-CA")}`;
 }
 
 export function moneyRange(r: PriceRange) {

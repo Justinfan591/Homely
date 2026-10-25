@@ -1,12 +1,29 @@
 import { router } from "expo-router";
-import type { ReactNode } from "react";
-import { Pressable, ScrollView, StyleSheet, View } from "react-native";
+import { createContext, useCallback, useContext, useState, type ReactNode } from "react";
+import { Pressable, RefreshControl, ScrollView, StyleSheet, View } from "react-native";
 import Animated, { FadeInDown } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { colors, gutter, radius, shadow } from "@/theme";
 import { haptic } from "./haptics";
 import { Icon } from "./Icon";
 import { Text } from "./Text";
+
+/** Pull to refresh for every scrolling Screen below it (a screen made of several sub-views sets it once). */
+const RefreshContext = createContext<(() => Promise<unknown>) | undefined>(undefined);
+export const RefreshProvider = ({ onRefresh, children }: { onRefresh: () => Promise<unknown>; children: ReactNode }) => (
+  <RefreshContext.Provider value={onRefresh}>{children}</RefreshContext.Provider>
+);
+
+/** State for a RefreshControl on a plain ScrollView: `<RefreshControl {...pull} />`. */
+export function usePullToRefresh(reload: () => Promise<unknown>) {
+  const [refreshing, setRefreshing] = useState(false);
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await reload().catch(() => {});
+    setRefreshing(false);
+  }, [reload]);
+  return { refreshing, onRefresh, tintColor: colors.ink, colors: [colors.ink] };
+}
 
 /** The design's round white back button (48 px, soft shadow). `dark` is for use over the camera. */
 export function CircleButton({
@@ -75,6 +92,8 @@ export function Title({ title, sub, size = "display" }: { title: string; sub?: s
  * Standard screen: ground background, round back button with an optional centred title,
  * scrolling content and a pinned footer for the main action.
  */
+const noop = async () => {};
+
 export function Screen({
   children,
   footer,
@@ -84,6 +103,7 @@ export function Screen({
   trailing,
   scroll = true,
   hideBack,
+  onRefresh,
 }: {
   children: ReactNode;
   footer?: ReactNode;
@@ -95,10 +115,16 @@ export function Screen({
   trailing?: ReactNode;
   scroll?: boolean;
   hideBack?: boolean;
+  /** Pull to refresh (scrolling screens only): reload the screen's data. */
+  onRefresh?: () => Promise<unknown>;
 }) {
   const insets = useSafeAreaInsets();
+  const inherited = useContext(RefreshContext);
+  const reload = onRefresh ?? inherited;
+  const pull = usePullToRefresh(reload ?? noop);
   const body = scroll ? (
     <ScrollView
+      refreshControl={reload ? <RefreshControl {...pull} /> : undefined}
       contentContainerStyle={{ paddingHorizontal: gutter, paddingTop: 8, paddingBottom: 32, flexGrow: 1 }}
       showsVerticalScrollIndicator={false}
       keyboardShouldPersistTaps="handled"

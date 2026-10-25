@@ -11,6 +11,7 @@ import { db, schema } from "@/db";
 import { ApiError } from "../mobile/src/services/api";
 import { createHttpApi } from "../mobile/src/services/http";
 import type { Job, SpecOutcome } from "../mobile/src/domain/types";
+import { quote, toRateCard } from "@/shared/scope";
 
 const BASE = (process.env.E2E_BASE_URL ?? "http://localhost:3000").replace(/\/+$/, "");
 const FIX = path.join(process.cwd(), "scripts/fixtures");
@@ -194,24 +195,24 @@ async function main() {
     assert.deepEqual([job.status, job.slotConfirmed, job.slot?.start, job.price, job.providerName], ["accepted", true, requested.start, { low: f.value, high: f.value }, "Mold Busters"]);
     ok(`phone: ${job.providerName} booked ${job.slot?.label}, $${f.value}`);
     assert.ok(!(await inTab(cs.id, "new", jobId)), "gone from ClearSpore's queue");
-    assert.ok(await inTab(mb.id, "active", jobId), "in Mold Busters' Active");
-    ok("ClearSpore no longer sees it; Mold Busters has it in Active");
+    assert.ok(await inTab(mb.id, "bookings", jobId), "in Mold Busters' Bookings");
+    ok("ClearSpore no longer sees it; Mold Busters has it in Bookings");
 
     step("Stepper drives the phone; homeowner rates");
-    html = await proPage(mb.id, `&tab=active&job=${jobId}`);
-    assert.ok(html.includes("calendar.google.com/calendar/render"));
-    await submit(mb.id, html, 'name="to"', { job: String(jobId), tab: "active", to: "en_route" });
+    html = await proPage(mb.id, `&tab=bookings&job=${jobId}`);
+    assert.ok(html.includes("calendar.google.com/calendar/render"), "Add to Google Calendar link on the booking");
+    await submit(mb.id, html, 'name="to"', { job: String(jobId), tab: "bookings", to: "en_route" });
     job = await app.getJob(job.id);
     assert.equal(job.status, "en_route");
     assert.equal(typeof job.etaMinutes, "number");
     ok(`on the way, arriving in ${job.etaMinutes} min`);
-    html = await proPage(mb.id, `&tab=active&job=${jobId}`);
-    await submit(mb.id, html, 'name="to"', { job: String(jobId), tab: "active", to: "done" });
+    html = await proPage(mb.id, `&tab=bookings&job=${jobId}`);
+    await submit(mb.id, html, 'name="to"', { job: String(jobId), tab: "bookings", to: "done" });
     job = await app.rateJob(job.id, { stars: 5, tags: ["On time"], note: "Great work" });
     assert.deepEqual([job.status, job.rating], ["done", 5]);
-    assert.ok(await inTab(mb.id, "done", jobId));
+    assert.ok(await inTab(mb.id, "bookings&show=past", jobId), "in Bookings · Past");
     assert.equal((await app.listRecord(home.id)).find((r) => r.id === scan.id)?.status, "done");
-    ok("done, rated 5, in the pro's Done tab and the Home Record");
+    ok("done, rated 5, in the pro's past bookings and the Home Record");
 
     step("Pass: every pro passes → phone offers a virtual call at a picked time");
     const d = await scanAndEstimate("mold");
@@ -269,17 +270,15 @@ async function main() {
     assert.equal((await restarted.getSpecOutcome(lost.id)).kind, "match");
     ok("answering again gives the estimate");
 
-    step("Profile questions, then the pricing step re-prices the queue");
+    step("Profile questions, then the pricing chat sets the rates the queue is priced with");
     const r = await scanAndEstimate("mold");
     assert.equal(r.outcome.kind, "match");
     await app.requestOffers(r.scanId);
     const rJob = db.select().from(schema.scopeJobs).where(eq(schema.scopeJobs.scanId, Number(r.scanId))).get()!.id;
     const spec = db.select().from(schema.jobSpecs).where(eq(schema.jobSpecs.scanId, Number(r.scanId))).get()!;
     db.update(schema.providers).set({ profile: null }).where(eq(schema.providers.id, mb.id)).run();
-    const dash = await proPage(mb.id);
-    assert.match(dash, /Finish profile/);
-    assert.doesNotMatch(dash, /Rate card/);
-    ok("dashboard nudges to finish the profile; no rate card tab");
+    assert.match(await proPage(mb.id), /Finish profile/);
+    ok("dashboard nudges to finish the profile");
     await submit(mb.id, await proPage(mb.id, "&tab=profile"), ">Start<", {});
     let asked = 0;
     for (let html = await proPage(mb.id, "&tab=profile"); html.includes('name="answer"'); html = await proPage(mb.id, "&tab=profile")) {
@@ -289,13 +288,16 @@ async function main() {
       assert.equal(back.get("error"), null, `answer ${asked}: ${back.get("error")}`);
     }
     assert.ok(asked >= 4);
-    ok(`answered ${asked} profile questions`);
-    await submit(mb.id, await proPage(mb.id, "&tab=profile"), 'name="callOut"', { finishing: "1", callOut: "200", perM2: "50", severePct: "0" });
     assert.doesNotMatch(await proPage(mb.id), /Finish profile/);
-    ok("profile complete; the nudge is gone");
-    const want = Math.round((200 + 50 * spec.areaM2) / 5) * 5;
-    assert.equal(acceptForm(await proPage(mb.id, `&tab=new&job=${rJob}`)).value, want);
-    ok(`(200 + 50 × ${spec.areaM2}) × 1 → $${want}`);
+    ok(`answered ${asked} profile questions; profile complete, the nudge is gone`);
+
+    const reply = await submit(mb.id, await proPage(mb.id, "&tab=pricing"), 'name="message"', { message: "CA$200 call-out with the first hour, then CA$100 an hour, parts plus 15%." });
+    assert.equal(reply.get("error"), null, `pricing chat: ${reply.get("error")}`);
+    await submit(mb.id, await proPage(mb.id, "&tab=pricing"), ">Approve<", {});
+    const card = toRateCard(db.select().from(schema.providers).where(eq(schema.providers.id, mb.id)).get()!.rateCard);
+    const want = quote(card, { severity: spec.severity, hours: spec.hours, partsCost: spec.partsCost }).price;
+    assert.equal(acceptForm(await proPage(mb.id, `&tab=requests&job=${rJob}`)).value, want);
+    ok(`approved rates (CA$${card.callOut} call-out + CA$${card.hourly}/h) price the open request at CA$${want}`);
 
     console.log(`\nAll ${checks} checks passed.`);
   } finally {
@@ -310,7 +312,7 @@ async function main() {
         tx.delete(schema.scanPhotos).where(inArray(schema.scanPhotos.scanId, ids)).run();
         tx.delete(schema.scans).where(inArray(schema.scans.id, ids)).run();
         for (const s of snapshot) {
-          tx.update(schema.providers).set({ rating: s.rating, ratingCount: s.ratingCount, rateCard: s.rateCard, description: s.description, profile: s.profile }).where(eq(schema.providers.id, s.id)).run();
+          tx.update(schema.providers).set({ rating: s.rating, ratingCount: s.ratingCount, rateCard: s.rateCard, description: s.description, profile: s.profile, pricing: s.pricing, hours: s.hours }).where(eq(schema.providers.id, s.id)).run();
         }
       });
       for (const id of ids) fs.rmSync(path.join(process.cwd(), "uploads", `scan-${id}`), { recursive: true, force: true });

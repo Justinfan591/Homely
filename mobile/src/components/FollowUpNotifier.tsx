@@ -79,7 +79,7 @@ export function FollowUpNotifier() {
       Notifications.scheduleNotificationAsync({
         content: {
           title: now === 1 ? "You have an offer" : `${now} offers in`,
-          body: `Lowest so far: $${Math.round(item.bestOffer.price).toLocaleString("en-US")} from ${item.bestOffer.provider}. Tap to pick one.`,
+          body: `Lowest so far: CA$${Math.round(item.bestOffer.price).toLocaleString("en-CA")} from ${item.bestOffer.provider}. Tap to pick one.`,
           data: { href: item.href },
         },
         trigger: null,

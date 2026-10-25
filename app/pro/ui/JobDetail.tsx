@@ -1,6 +1,7 @@
 import type { Provider } from "@/db/schema";
 import { timeAgo } from "@/shared/format";
-import { ESTIMATE_LABEL, JOB_STATUS_LABELS, SEVERITY_LABELS, priceRange, usd, type ProJobDetail, type ProTab } from "@/shared/scope";
+import { Estimate } from "./Estimate";
+import { ESTIMATE_LABEL, JOB_STATUS_LABELS, SEVERITY_LABELS, priceRange, cad, type ProJobDetail } from "@/shared/scope";
 import { tradeArt } from "../art";
 import { CalendarLink } from "./Calendar";
 import { confidenceTone, Severity, Stars } from "./JobCard";
@@ -10,7 +11,7 @@ import { AdvanceForm, Progress } from "./Schedule";
 const when = (iso: string) => new Date(iso).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 
 /** The open job: what the homeowner said and showed, the spec, the price, and what this pro can do next. */
-export function JobDetail({ d, p, tab }: { d: ProJobDetail; p: Provider; tab: ProTab }) {
+export function JobDetail({ d, p, tab }: { d: ProJobDetail; p: Provider; tab: string }) {
   const { job, spec, template, quote } = d;
   const mine = job.provider?.id === p.id;
   const shotPrompt = (id: string) => template.required_shots.find((s) => s.id === id)?.prompt ?? id;
@@ -60,20 +61,16 @@ export function JobDetail({ d, p, tab }: { d: ProJobDetail; p: Provider; tab: Pr
       {d.fitReason && <p className="why">Why you: {d.fitReason}</p>}
 
       <div className="card pricecard">
-        <div>
-          <div className="muted small">Suggested price</div>
-          <div className="big">{usd(quote.price)}</div>
-          <div className="muted small">{priceRange(quote.low, quote.high)}</div>
-        </div>
+        <Estimate quote={quote} spec={spec} />
         {job.price != null && (
           <div>
             <div className="muted small">Confirmed</div>
-            <div className="big">{usd(job.price)}</div>
+            <div className="big">{cad(job.price)}</div>
           </div>
         )}
-        {d.priceReason && <p className="why">{d.priceReason}</p>}
         <span className="muted small" style={{ flexBasis: "100%" }}>
-          {ESTIMATE_LABEL}. {d.priceReason ? "Your profile prices, adjusted for this job." : "From your profile prices."}
+          {ESTIMATE_LABEL}. Your rates × the agent&apos;s estimate of time and parts ({priceRange(quote.low, quote.high)}).
+          {d.needsApproval ? " Over your limit, so the agent left this one for you." : ""}
         </span>
       </div>
 

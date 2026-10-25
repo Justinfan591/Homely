@@ -26,7 +26,7 @@ const BARS = 24;
 /** Each bar's share of the level, so the wave has a shape instead of moving as one block. */
 const SHAPE = Array.from({ length: BARS }, (_, i) => 0.55 + 0.45 * Math.abs(Math.sin(i * 1.7 + 0.4)));
 
-/** Tell us · listening. Records, then the server transcribes it (OpenAI) and we move on to the photo. */
+/** Tell us · listening. Records, the server transcribes it (OpenAI), then the AI suggests what's wrong. */
 export default function Listening() {
   const recorder = useAudioRecorder({ ...RecordingPresets.HIGH_QUALITY, isMeteringEnabled: true });
   const state = useAudioRecorderState(recorder, 80);
@@ -84,8 +84,12 @@ export default function Listening() {
       await setAudioModeAsync({ allowsRecording: false }).catch(() => {});
       const uri = recorder.uri;
       if (!uri || Date.now() - startedAt.current < 800) throw new Error("That was a bit short. Tell us a little more about it.");
+      intake.source = "voice";
       intake.text = await api.transcribe(uri);
-      router.replace("/tell/photo");
+      intake.photoUri = null;
+      // Straight to the AI's guess: talking is enough, no photo needed yet.
+      intake.result = await api.classify(intake.text, null);
+      router.replace("/tell/confirm");
     } catch (e) {
       setPhase({ kind: "error", message: e instanceof Error ? e.message : "We couldn't hear that. Try again.", canRetry: true });
     }
@@ -117,7 +121,7 @@ export default function Listening() {
         {phase.kind === "thinking" ? (
           <View style={styles.thinking}>
             <ActivityIndicator color={colors.ink} />
-            <Text tone="soft">Writing down what you said…</Text>
+            <Text tone="soft">Working out what's wrong…</Text>
           </View>
         ) : null}
       </View>

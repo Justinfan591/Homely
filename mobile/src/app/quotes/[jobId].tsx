@@ -47,7 +47,7 @@ export default function Quotes() {
   const sub = job ? [job.title, job.slot ? windowLabel(job.slot.start) : null].filter(Boolean).join(" · ") : "";
 
   return (
-    <Screen onBack={goHome}>
+    <Screen onBack={goHome} onRefresh={() => mutate()}>
       <View style={{ marginTop: 16 }}>
         <Title
           title={offers.length ? `${offers.length} ${offers.length === 1 ? "quote" : "quotes"} for you` : "Waiting for quotes"}

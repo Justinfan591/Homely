@@ -1,5 +1,5 @@
 import { router } from "expo-router";
-import { Pressable, ScrollView, StyleSheet, View } from "react-native";
+import { Pressable, RefreshControl, ScrollView, StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Skeleton } from "@/components/Controls";
 import { TradeArt } from "@/components/Design";
@@ -13,6 +13,7 @@ import { useHome } from "@/hooks/home";
 import { getTemplate } from "@/templates";
 import { tradeCategory } from "@/templates/art";
 import { colors, gutter, radius, shadow } from "@/theme";
+import { usePullToRefresh } from "@/components/Screen";
 
 const PAST: RecordStatus[] = ["done", "cancelled", "declined"];
 
@@ -34,6 +35,7 @@ export default function Bookings() {
   const insets = useSafeAreaInsets();
   const { home } = useHome();
   const record = useRecord(home?.id);
+  const pull = usePullToRefresh(() => record.mutate());
   const items = record.data ?? [];
   const upcoming = items.filter((i) => !PAST.includes(i.status));
   const past = items.filter((i) => PAST.includes(i.status));
@@ -43,6 +45,7 @@ export default function Bookings() {
       style={{ flex: 1, backgroundColor: colors.bg }}
       contentContainerStyle={{ paddingTop: insets.top + 32, paddingHorizontal: gutter, paddingBottom: 32 }}
       showsVerticalScrollIndicator={false}
+      refreshControl={<RefreshControl {...pull} />}
     >
       <Text variant="display" accessibilityRole="header">
         Bookings

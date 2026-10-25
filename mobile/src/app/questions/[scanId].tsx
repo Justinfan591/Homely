@@ -8,18 +8,20 @@ import { NoteBox } from "@/components/Design";
 import { goHome, Screen, Title } from "@/components/Screen";
 import { ErrorState } from "@/components/States";
 import { Text } from "@/components/Text";
-import { useScan } from "@/hooks/data";
+import { useQuestions, useScan } from "@/hooks/data";
 import { api } from "@/services";
-import { getTemplate } from "@/templates";
 import { radius } from "@/theme";
 
 /**
- * Questions · pick / write / notes. One template question per step, a free-text answer when none of
+ * Questions · pick / write / notes. The questions agent writes them from what the homeowner said and
+ * photographed (so nothing they already told us is asked again). One question per step, a free-text answer when none of
  * the options fit, then an optional note. Also answers a pro's "ask for more" (just their questions).
  */
 export default function Questions() {
   const { scanId } = useLocalSearchParams<{ scanId: string }>();
-  const { data: scan, error, mutate } = useScan(scanId);
+  const { data: scan, error: scanError, mutate: reloadScan } = useScan(scanId);
+  const { data: questions, error: questionsError, mutate: reloadQuestions } = useQuestions(scanId);
+  const error = scanError ?? questionsError;
   const [step, setStep] = useState(0);
   const [writing, setWriting] = useState(false);
   const [draft, setDraft] = useState("");
@@ -31,14 +33,17 @@ export default function Questions() {
   if (error) {
     return (
       <Screen onBack={goHome}>
-        <ErrorState message={error.message} onRetry={() => mutate()} />
+        <ErrorState message={error.message} onRetry={() => (scanError ? reloadScan() : reloadQuestions())} />
       </Screen>
     );
   }
-  if (!scan) {
+  if (!scan || !questions) {
     return (
       <Screen onBack={goHome}>
         <View style={{ gap: 10, marginTop: 32 }}>
+          <Text tone="soft" style={{ marginBottom: 6 }}>
+            Thinking of a few questions…
+          </Text>
           <Skeleton height={40} width="70%" />
           <Skeleton height={68} radius={radius.md} />
           <Skeleton height={68} radius={radius.md} />
@@ -48,9 +53,7 @@ export default function Questions() {
     );
   }
 
-  const template = getTemplate(scan.trade);
   const followUp = scan.followUp;
-  const questions = template.questions.filter((q) => !followUp || followUp.questionIds?.includes(q.id));
   const onNotes = step >= questions.length;
   const q = questions[step];
   const answer = q ? answers[q.id] : undefined;

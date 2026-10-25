@@ -1,17 +1,18 @@
-import { Redirect, router } from "expo-router";
-import { Pressable, ScrollView, StyleSheet, View } from "react-native";
+import { Redirect, router, type Href } from "expo-router";
+import { useState } from "react";
+import { Pressable, RefreshControl, ScrollView, StyleSheet, View } from "react-native";
 import Animated, { FadeIn } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { Button } from "@/components/Button";
 import { Avatar, TradeArt } from "@/components/Design";
 import { haptic } from "@/components/haptics";
+import { Icon } from "@/components/Icon";
 import { ServiceGrid } from "@/components/ServiceGrid";
 import { Text } from "@/components/Text";
 import { windowLabel } from "@/domain/format";
 import type { RecordItem } from "@/domain/types";
 import { useProfile, useRecord } from "@/hooks/data";
 import { useHome } from "@/hooks/home";
-import { resetIntake } from "@/hooks/intake";
+import { resetIntake, type IntakeSource } from "@/hooks/intake";
 import { colors, gutter, radius, shadow } from "@/theme";
 
 /** What the "Up next" card shows first, most urgent first. */
@@ -23,34 +24,76 @@ export default function Home() {
   const { home } = useHome();
   const profile = useProfile();
   const record = useRecord(home?.id);
+  const [refreshing, setRefreshing] = useState(false);
 
-  // Sign-up isn't finished until we have a name and a home.
+  // Sign-up isn't finished until we have a name and a home. (Every hook above this line.)
   if (profile.data && !profile.data.name.trim()) return <Redirect href="/setup/name" />;
   if (profile.data && !profile.data.address) return <Redirect href="/setup/home" />;
 
   const next = NEXT_ORDER.map((s) => record.data?.find((i) => i.status === s)).find(Boolean);
 
-  function tell() {
+  async function refresh() {
+    setRefreshing(true);
+    await Promise.all([record.mutate(), profile.mutate()]).catch(() => {});
+    setRefreshing(false);
+  }
+
+  /** Each button is one way in: type it, say it, or show it. All three end on "Is this right?". */
+  function start(source: IntakeSource, href: Href) {
     haptic.tap();
-    resetIntake();
-    router.push("/tell");
+    resetIntake(source);
+    router.push(href);
   }
 
   return (
-    <ScrollView style={styles.screen} contentContainerStyle={{ paddingTop: insets.top + 24, paddingHorizontal: gutter, paddingBottom: 24 }}>
+    <ScrollView
+      style={styles.screen}
+      contentContainerStyle={[styles.content, { paddingTop: insets.top }]}
+      showsVerticalScrollIndicator={false}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={colors.ink} colors={[colors.ink]} />}
+    >
       {next ? (
-        <Animated.View entering={FadeIn.duration(300)}>
+        <Animated.View entering={FadeIn.duration(300)} style={{ paddingTop: 32 }}>
           <Text variant="display" accessibilityRole="header">
             Up next
           </Text>
           <UpNext item={next} />
         </Animated.View>
       ) : null}
-      <Text variant={next ? "title" : "hero"} accessibilityRole="header" style={{ marginBottom: 24 }} numberOfLines={1} adjustsFontSizeToFit>
+      <Text
+        variant={next ? "title" : "hero"}
+        accessibilityRole="header"
+        style={{ marginTop: next ? 0 : 32, marginBottom: 24 }}
+        numberOfLines={1}
+        adjustsFontSizeToFit
+      >
         {next ? "Something else?" : "What needs fixing?"}
       </Text>
-      <ServiceGrid description={null} />
-      <Button label="Or tell us what's wrong" variant="secondary" icon="mic" onPress={tell} disabled={!home} style={{ marginTop: 20 }} />
+      <ServiceGrid fresh />
+      {/* "Type it" is the grid's Other tile; saying it or showing it are the other two ways in. */}
+      <View style={styles.actions}>
+        <Text variant="label" tone="soft">
+          Or tell us
+        </Text>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Tell us what's wrong"
+          disabled={!home}
+          onPress={() => start("voice", "/tell")}
+          style={({ pressed }) => [styles.tell, (pressed || !home) && { opacity: 0.8 }]}
+        >
+          <Icon name="mic" size={24} color={colors.white} />
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Snap a photo instead"
+          disabled={!home}
+          onPress={() => start("photo", "/tell/photo")}
+          style={({ pressed }) => [styles.round, shadow, pressed && { backgroundColor: colors.fillPressed }]}
+        >
+          <Icon name="camera" size={24} />
+        </Pressable>
+      </View>
     </ScrollView>
   );
 }
@@ -108,6 +151,19 @@ function UpNext({ item }: { item: RecordItem }) {
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg },
+  content: { flexGrow: 1, paddingHorizontal: gutter },
+  actions: { flexDirection: "row", alignItems: "center", gap: 16, marginTop: 20, marginBottom: 24 },
+  tell: {
+    flex: 1,
+    height: 64,
+    borderRadius: radius.pill,
+    backgroundColor: colors.ink,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+  },
+  round: { width: 64, height: 64, borderRadius: radius.pill, backgroundColor: colors.card, alignItems: "center", justifyContent: "center" },
   card: { marginTop: 24, marginBottom: 24, padding: 24, borderRadius: radius.xl, backgroundColor: colors.card, flexShrink: 1 },
   cardArt: { alignItems: "center", marginBottom: 8 },
   who: { flexDirection: "row", alignItems: "center", gap: 10, marginTop: 14 },

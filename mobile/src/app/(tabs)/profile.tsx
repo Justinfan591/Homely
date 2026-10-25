@@ -1,5 +1,5 @@
 import { router } from "expo-router";
-import { Pressable, ScrollView, StyleSheet, View } from "react-native";
+import { Pressable, RefreshControl, ScrollView, StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Button } from "@/components/Button";
 import { Skeleton } from "@/components/Controls";
@@ -10,11 +10,13 @@ import { Text } from "@/components/Text";
 import { useProfile } from "@/hooks/data";
 import { api } from "@/services";
 import { colors, gutter, radius } from "@/theme";
+import { usePullToRefresh } from "@/components/Screen";
 
 /** Profile */
 export default function Profile() {
   const insets = useSafeAreaInsets();
   const { data: profile, error, mutate } = useProfile();
+  const pull = usePullToRefresh(() => mutate());
   const edit = () => router.push("/profile/edit");
 
   return (
@@ -22,6 +24,7 @@ export default function Profile() {
       style={{ flex: 1, backgroundColor: colors.bg }}
       contentContainerStyle={{ paddingTop: insets.top + 32, paddingHorizontal: gutter, paddingBottom: 32 }}
       showsVerticalScrollIndicator={false}
+      refreshControl={<RefreshControl {...pull} />}
     >
       <View style={styles.head}>
         <Text variant="display" accessibilityRole="header">

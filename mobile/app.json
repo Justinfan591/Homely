@@ -48,6 +48,12 @@
         {
           "microphonePermission": "Scope uses the microphone so you can describe the problem out loud."
         }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Scope uses your location to fill in your home address."
+        }
       ]
     ],
     "experiments": {

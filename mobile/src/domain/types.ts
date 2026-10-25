@@ -73,6 +73,10 @@ export type JobSpec = {
   confidence: number;
   /** Trade-specific findings, e.g. "Likely moisture source", already labelled. */
   fields: { label: string; value: string }[];
+  /** What the homeowner is shown: the top pro's range, or a best guess when no pro priced it. */
+  price?: PriceRange | null;
+  /** Set for a best guess: one line on what it's based on. */
+  priceBasis?: string | null;
   createdAt: string;
 };
 
@@ -208,10 +212,21 @@ export type Profile = {
   homeType: string | null;
 };
 
-export type ProfileUpdate = { name?: string; age?: number | null; address?: string; homeType?: string | null };
+/** `lat`/`lng`: where a picked suggestion (or the phone's location) is, so the server needn't look it up. */
+export type ProfileUpdate = { name?: string; age?: number | null; address?: string; homeType?: string | null; lat?: number; lng?: number };
 
-/** "It sounds like Plumbing: A leak under the kitchen sink." */
-export type Classification = { trade: TradeId; label: string; summary: string };
+/** One address type-ahead suggestion: "1000 Rue Sherbrooke Ouest" / "Montreal, Quebec". */
+export type AddressSuggestion = { address: string; line1: string; line2: string; lat: number; lng: number };
+
+/** "It sounds like Plumbing: A leak under the kitchen sink.", with two other guesses to offer. */
+export type Classification = {
+  trade: TradeId;
+  label: string;
+  summary: string;
+  alternatives: { trade: TradeId; label: string }[];
+  /** With a photo: which of the top trade's shots it already covers. */
+  shotId: string | null;
+};
 
 export const REVIEW_TAGS = ["On time", "Tidy", "Fair price", "Clear communication"] as const;
 export type Review = { stars: number; tags: string[]; note: string };

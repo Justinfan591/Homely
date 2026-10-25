@@ -4,6 +4,7 @@ import { KeyboardAvoidingView, Platform, StyleSheet, View } from "react-native";
 import { useSWRConfig } from "swr";
 import { Button } from "@/components/Button";
 import { Chip } from "@/components/Controls";
+import { AddressField } from "@/components/AddressField";
 import { Field } from "@/components/Design";
 import { Screen } from "@/components/Screen";
 import { Text } from "@/components/Text";
@@ -23,6 +24,7 @@ function Form({ profile }: { profile: Profile }) {
   const [name, setName] = useState(profile.name);
   const [age, setAge] = useState(profile.age ? String(profile.age) : "");
   const [address, setAddress] = useState(profile.address ?? "");
+  const [at, setAt] = useState<{ lat: number; lng: number } | null>(null);
   const [homeType, setHomeType] = useState(profile.homeType ?? "Apartment");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -33,7 +35,7 @@ function Form({ profile }: { profile: Profile }) {
     setBusy(true);
     setError(null);
     try {
-      await mutate("profile", api.updateProfile({ name: name.trim(), age: ageNum, address: address.trim(), homeType }), { revalidate: false });
+      await mutate("profile", api.updateProfile({ name: name.trim(), age: ageNum, address: address.trim(), homeType, ...(at ?? {}) }), { revalidate: false });
       await mutate("homes");
       router.back();
     } catch (e) {
@@ -65,7 +67,19 @@ function Form({ profile }: { profile: Profile }) {
               Enter an age between 13 and 120.
             </Text>
           ) : null}
-          <Field label="Address" icon="map-pin" value={address} onChangeText={setAddress} autoComplete="street-address" textContentType="fullStreetAddress" />
+          <AddressField
+            label="Address"
+            value={address}
+            onChangeText={(t) => {
+              setAddress(t);
+              setAt(null);
+            }}
+            onPick={(s) => {
+              setAddress(s.address);
+              setAt({ lat: s.lat, lng: s.lng });
+            }}
+            placeholder="Street address, city"
+          />
         </View>
         <Text variant="label" tone="soft" style={{ marginTop: 28, marginBottom: 12 }}>
           Type of home

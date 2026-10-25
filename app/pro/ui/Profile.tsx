@@ -1,7 +1,7 @@
 import Link from "next/link";
 import type { Provider } from "@/db/schema";
-import { DESCRIPTION_MAX, PRICE_ADJUST_MAX, PROFILE_MAX_QUESTIONS, priceRange, pricingFromRateCard, quote, type ProfileStatus, type ProfileTurn } from "@/shared/scope";
-import { answerProfile, retryProfile, saveProfile, saveProfilePricing, saveProviderWebsite, skipProfileQuestion, startProfile } from "../actions";
+import { DESCRIPTION_MAX, PROFILE_MAX_QUESTIONS, type ProfileStatus, type ProfileTurn } from "@/shared/scope";
+import { answerProfile, retryProfile, saveProfile, saveProviderWebsite, skipProfileQuestion, startProfile } from "../actions";
 import { proHref } from "../href";
 import { SubmitButton } from "../SubmitButton";
 
@@ -23,7 +23,7 @@ export function ProfileNudge({ providerId, status }: { providerId: number; statu
   );
 }
 
-/** Profile tab: the agent interview (one question at a time, like the app), then pricing, then the finished profile. */
+/** Profile (Setup): the agent interview (one question at a time, like the app), then the finished profile. */
 export function Profile({ p }: { p: Provider }) {
   const profile = p.profile;
   const hidden = <input type="hidden" name="provider" value={p.id} />;
@@ -120,54 +120,6 @@ export function Profile({ p }: { p: Provider }) {
     );
   }
 
-  const pricing = pricingFromRateCard(p.rateCard);
-  const example = quote(p.rateCard, { severity: 3, areaM2: 2 });
-  const pricingForm = (finishing: boolean) => (
-    <form action={saveProfilePricing} className="stack">
-      {hidden}
-      <input type="hidden" name="finishing" value={finishing ? "1" : "0"} />
-      <div className="grid3">
-        <label className="field">
-          Call-out fee ($)
-          <input type="number" name="callOut" min={0} step="any" defaultValue={pricing.callOut} required />
-        </label>
-        <label className="field">
-          Price per m² ($)
-          <input type="number" name="perM2" min={0} step="any" defaultValue={pricing.perM2} required />
-        </label>
-        <label className="field">
-          Extra for the most severe jobs (%)
-          <input type="number" name="severePct" min={0} max={1000} step="1" defaultValue={pricing.severePct} required />
-        </label>
-      </div>
-      <p className="muted small">
-        Suggested price = call-out + price per m² × area, rising to +{pricing.severePct}% for the most severe jobs, shown as a ±15% range. With
-        these numbers a 2 m² moderate job comes out at {priceRange(example.low, example.high)}. Scope then adjusts each job by up to ±{PRICE_ADJUST_MAX}% (access,
-        urgency, what you include) and shows you why. You can still set any price on each offer.
-      </p>
-      <button className={finishing ? "btn primary big" : "btn primary"}>{finishing ? "Finish profile" : "Save prices"}</button>
-    </form>
-  );
-
-  if (profile.stage === "pricing") {
-    return (
-      <div className="stack narrow">
-        <div className="page-head">
-          <h1>Last step: your prices</h1>
-        </div>
-        <div className="card stack">
-          <p className="muted">Your prices are the starting point for every suggestion. Scope adjusts each one for the job and tells you why.</p>
-          {pricingForm(true)}
-          {profile.draftDescription && (
-            <p className="small">
-              <span className="muted">Your profile summary:</span> {profile.draftDescription}
-            </p>
-          )}
-        </div>
-      </div>
-    );
-  }
-
   const f = profile.facts;
   return (
     <div className="stack narrow">
@@ -229,7 +181,10 @@ export function Profile({ p }: { p: Provider }) {
       </div>
       <div className="card stack">
         <h2 style={{ fontSize: 22, letterSpacing: "-0.03em" }}>Prices</h2>
-        {pricingForm(false)}
+        <p className="muted">Your rates are set in Pricing, by chatting with the pricing agent.</p>
+        <Link className="btn" href={proHref(p.id, { tab: "pricing" })}>
+          Open Pricing
+        </Link>
       </div>
     </div>
   );
