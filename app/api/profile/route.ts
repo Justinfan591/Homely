@@ -28,6 +28,9 @@ const body = z.object({
   age: z.number().int().min(13).max(120).nullable().optional(),
   address: z.string().trim().min(1, "Enter your address.").max(200).optional(),
   homeType: z.enum(HOME_TYPES).nullable().optional(),
+  /** Where a picked suggestion (or the phone's location) is. Without it the address is geocoded here. */
+  lat: z.number().min(-90).max(90).optional(),
+  lng: z.number().min(-180).max(180).optional(),
 });
 
 /** Sign-up (name, then home) and Profile · edit. Only the fields sent are changed. */
@@ -40,8 +43,9 @@ export const PUT = route(async (req) => {
   if (Object.keys(set).length) db.update(schema.users).set(set).where(eq(schema.users.id, user.id)).run();
 
   const home = homeOf(user);
-  if (input.address !== undefined && input.address !== home?.address) {
-    const at = await geocode(input.address);
+  const picked = input.lat !== undefined && input.lng !== undefined;
+  if (input.address !== undefined && (input.address !== home?.address || picked)) {
+    const at = picked ? { lat: input.lat!, lng: input.lng! } : await geocode(input.address);
     saveHome(user, { address: input.address, lat: at.lat, lng: at.lng, homeType: input.homeType });
   } else if (input.homeType !== undefined && home) {
     saveHome(user, { address: home.address, lat: home.lat, lng: home.lng, homeType: input.homeType });

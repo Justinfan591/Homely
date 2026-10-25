@@ -2,9 +2,11 @@ import { matchProviders } from "@/domain/matching";
 import { priceRange } from "@/domain/pricing";
 import { slotLabel } from "@/domain/format";
 import type {
+  AddressSuggestion,
   Classification,
   Job,
   JobSpec,
+  MatchOption,
   Offer,
   PhotoVerdict,
   Profile,
@@ -17,6 +19,15 @@ import type {
 import { getTemplate, templates } from "@/templates";
 import { ApiError, type ScopeApi } from "../api";
 import { homes, providers, seedJobs, seedScans, seedSpecs } from "./seed";
+
+/** A few Toronto addresses for the offline type-ahead. */
+const MOCK_ADDRESSES: AddressSuggestion[] = [
+  { address: "142 Lakeview Ave, Toronto", line1: "142 Lakeview Ave", line2: "Toronto, Ontario", lat: 43.6532, lng: -79.3832 },
+  { address: "100 Queen St W, Toronto", line1: "100 Queen St W", line2: "Toronto, Ontario", lat: 43.6525, lng: -79.3839 },
+  { address: "290 Bremner Blvd, Toronto", line1: "290 Bremner Blvd", line2: "Toronto, Ontario", lat: 43.6426, lng: -79.3871 },
+  { address: "55 Mill St, Toronto", line1: "55 Mill St", line2: "Toronto, Ontario", lat: 43.6503, lng: -79.3596 },
+  { address: "18 Pine Point Rd, Honey Harbour", line1: "18 Pine Point Rd", line2: "Honey Harbour, Ontario", lat: 44.8582, lng: -79.8211 },
+];
 
 /** Knobs for exercising states that a real backend would produce on its own. */
 export const mockConfig = {
@@ -59,10 +70,10 @@ const setSignedIn = (v: boolean) => {
 const profile: Profile = { name: "", email: null, phone: null, age: null, address: null, homeType: null };
 
 const TRADE_WORDS: [string, RegExp][] = [
+  ["roofing", /roof|shingle|gutter|ceiling leak/i],
   ["plumbing_sink", /leak|drip|sink|faucet|tap|pipe|drain|toilet/i],
   ["mold", /mou?ld|mildew|black spot|musty/i],
   ["electrical", /outlet|socket|switch|breaker|electric|wiring|spark|power/i],
-  ["locksmith", /lock|keys?\b/i],
   ["appliances", /fridge|washer|dryer|dishwasher|oven|stove|appliance|freezer/i],
   ["painting", /paint|peel/i],
   ["garden", /garden|lawn|yard|tree|hedge|grass|weed/i],
@@ -196,6 +207,17 @@ function buildSpec(scan: Scan): JobSpec {
   };
 }
 
+/** Always a price for the homeowner: the top pro's range, else the middle price across every pro in the trade. */
+function estimateFor(spec: JobSpec, options: MatchOption[]): Pick<JobSpec, "price" | "priceBasis"> {
+  if (options[0]) return { price: options[0].price, priceBasis: null };
+  const ranges = providers
+    .filter((p) => p.trades.includes(spec.trade))
+    .map((p) => priceRange(p.rateCard, spec.areaM2, spec.severity))
+    .sort((a, b) => a.low - b.low);
+  const price = ranges[Math.floor(ranges.length / 2)] ?? priceRange({ base: 100, perM2: 15, severityMultiplier: [1, 1.15, 1.4, 1.8, 2.3] }, spec.areaM2, spec.severity);
+  return { price, priceBasis: "Based on typical rates for similar jobs in your area." };
+}
+
 // ---- Job lifecycle -----------------------------------------------------------------------------
 
 /** Stands in for the provider accepting and driving to the house. Derived from elapsed time. */
@@ -257,10 +279,10 @@ export const mockApi: ScopeApi = {
 
   getProfile: () => call("getProfile", 150, () => ({ ...profile, address: profile.address ?? homes[0].address })),
 
-  updateProfile: (data) =>
+  updateProfile: ({ lat, lng, ...data }) =>
     call("updateProfile", 300, () => {
       Object.assign(profile, data);
-      if (data.address) homes[0] = { ...homes[0], address: data.address };
+      if (data.address) homes[0] = { ...homes[0], address: data.address, ...(lat !== undefined && lng !== undefined ? { lat, lng } : {}) };
       return { ...profile, address: profile.address ?? homes[0].address };
     }),
 
@@ -282,6 +304,15 @@ export const mockApi: ScopeApi = {
         alternatives,
         shotId: photoUri ? (t.requiredShots[0]?.id ?? null) : null,
       };
+    }),
+
+  reverseGeocode: () => call("reverseGeocode", 400, () => homes[0].address),
+
+  searchAddresses: (query) =>
+    call("searchAddresses", 200, () => {
+      const q = query.trim().toLowerCase();
+      if (q.length < 3) return [];
+      return MOCK_ADDRESSES.filter((a) => a.address.toLowerCase().includes(q) || q.split(" ").every((w) => a.address.toLowerCase().includes(w)));
     }),
 
   listHomes: () => call("listHomes", 150, () => homes),
@@ -395,6 +426,14 @@ export const mockApi: ScopeApi = {
       return structuredClone(scan);
     }),
 
+  // The mock has no questions agent: the template's questions, or just the ones a pro asked for.
+  getQuestions: (scanId) =>
+    call("getQuestions", 700, () => {
+      const scan = need(scans.get(scanId), "Scan");
+      const ids = scan.followUp?.questionIds;
+      return getTemplate(scan.trade).questions.filter((q) => !scan.followUp || ids?.includes(q.id));
+    }),
+
   submitAnswers: (scanId, answers, note) =>
     call("submitAnswers", 300, () => {
       const scan = need(scans.get(scanId), "Scan");
@@ -411,6 +450,8 @@ export const mockApi: ScopeApi = {
       const scan = need(scans.get(scanId), "Scan");
       const home = need(homes.find((h) => h.id === scan.homeId), "Home");
       const spec = buildSpec(scan);
+      const options = matchProviders(providers, home, spec, makeSlots());
+      Object.assign(spec, estimateFor(spec, options));
       specs.set(spec.id, spec);
 
       let outcome: SpecOutcome;
@@ -424,7 +465,7 @@ export const mockApi: ScopeApi = {
             providerRating: null,
             status: "handoff",
             slot: null,
-            price: null,
+            price: spec.price ?? null,
             etaMinutes: null,
             rating: null,
             createdAt: new Date().toISOString(),
@@ -433,7 +474,6 @@ export const mockApi: ScopeApi = {
           jobs.set(job.id, job);
         }
       } else {
-        const options = matchProviders(providers, home, spec, makeSlots());
         outcome = options.length ? { kind: "match", spec, options } : { kind: "no_provider", spec };
       }
       outcomes.set(scanId, outcome);
@@ -525,7 +565,7 @@ export const mockApi: ScopeApi = {
         providerRating: null,
         status: "pending",
         slot,
-        price: null,
+        price: outcome.spec.price ?? null,
         etaMinutes: null,
         rating: null,
         createdAt: new Date().toISOString(),
@@ -551,7 +591,7 @@ export const mockApi: ScopeApi = {
           providerRating: null,
           status: "handoff",
           slot: null,
-          price: null,
+          price: outcome.spec.price ?? null,
           etaMinutes: null,
           rating: null,
           createdAt: new Date().toISOString(),

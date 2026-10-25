@@ -22,7 +22,7 @@ export async function transcribe(audio: File): Promise<string> {
   const form = new FormData();
   form.set("model", MODEL);
   form.set("file", new File([await audio.arrayBuffer()], name, { type: audio.type || "audio/mp4" }));
-  form.set("prompt", "A homeowner describing a problem in their home: leaks, mold, electrical, locks, painting, garden, appliances.");
+  form.set("prompt", "A homeowner describing a problem in their home: leaks, mold, electrical, roofs and gutters, painting, garden, appliances.");
 
   let res: Response;
   try {

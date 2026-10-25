@@ -13,7 +13,7 @@ import { colors, radius, shadow } from "@/theme";
 
 /**
  * Tell us · is this right? The AI's best guess with one big "Yes", its two next guesses as one-tap
- * chips, and "Something else" for the full grid. Whichever they tap starts the guided photos.
+ * chips, and "Not quite" for the full grid. Whichever they tap starts the guided photos.
  */
 export default function Confirm() {
   const { home } = useHome();
@@ -35,7 +35,8 @@ export default function Confirm() {
     }
   }
 
-  const fromPhoto = !!intake.photoUri;
+  // Worded for how they told us: typed, said or showed.
+  const lead = intake.photoUri || intake.source === "photo" ? "It looks like" : intake.source === "type" ? "It reads like" : "It sounds like";
   const busy = starting != null;
 
   return (
@@ -61,7 +62,7 @@ export default function Confirm() {
       <View style={styles.center}>
         <TradeArt trade={result.trade} size={220} float />
         <Text variant="label" tone="soft" style={{ marginTop: 4 }}>
-          {fromPhoto ? "It looks like" : "It sounds like"}
+          {lead}
         </Text>
         <Text variant="hero" style={{ fontSize: 48, lineHeight: 50, marginTop: 6, textAlign: "center" }} accessibilityRole="header">
           {tradeCategory(result.trade, result.label)}
@@ -97,10 +98,10 @@ export default function Confirm() {
               </Pressable>
             ))}
           </View>
-          <Button label="Something else" variant="ghost" onPress={() => router.push("/tell/pick")} disabled={busy} />
+          <Button label="Not quite" variant="ghost" onPress={() => router.push("/tell/pick")} disabled={busy} />
         </View>
       ) : (
-        <Button label="Something else" variant="ghost" onPress={() => router.push("/tell/pick")} disabled={busy} />
+        <Button label="Not quite" variant="ghost" onPress={() => router.push("/tell/pick")} disabled={busy} />
       )}
     </Screen>
   );

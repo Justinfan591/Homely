@@ -1,0 +1,41 @@
+{
+  "trade": "roofing",
+  "label": "Roofing",
+  "description": "Roof leaks, missing or damaged shingles, storm damage and gutters.",
+  "icon": "home",
+  "area_label": "Damaged area",
+  "required_shots": [
+    { "id": "roof_wide", "prompt": "Show the whole roof from the yard or street", "tip": "Stay on the ground. Step back until the roof fits.", "hint": "The roof from the ground: its shape, the side with the problem, and the gutters if visible." },
+    { "id": "damage_closeup", "prompt": "Zoom in on the damaged spot", "tip": "Stay on the ground and use your zoom. Don't climb up.", "hint": "A zoomed-in view from the ground of the damaged area: missing, lifted or broken shingles, a sagging section, or debris." },
+    { "id": "inside_stain", "prompt": "Show any stain or drip on a ceiling or wall inside", "tip": "Use your phone light if the room is dark.", "hint": "A water stain, drip or bubbling paint on an inside ceiling or upper wall.", "optional": true, "skip_label": "There's nothing inside" },
+    { "id": "gutters", "prompt": "Show the gutters on that side of the house", "tip": "From the ground is fine.", "hint": "The gutters and downspouts along the roof edge, from the ground.", "optional": true, "skip_label": "I can't see them" }
+  ],
+  "questions": [
+    { "id": "problem", "q": "What's happening?", "options": ["Water is coming inside", "Shingles are missing or damaged", "Gutters are blocked or falling", "Damage after a storm"] },
+    { "id": "storeys", "q": "How tall is the house?", "options": ["1 storey", "2 storeys", "3 or more storeys"] },
+    { "id": "roof_age", "q": "Roughly how old is the roof?", "options": ["Under 10 years", "10-20 years", "Over 20 years", "Not sure"], "optional": true }
+  ],
+  "notes": { "enabled": true, "prompt": "Anything else? (optional)" },
+  "outputs": ["affected_area_m2", "severity", "roof_type", "damage_type", "recommended_service"],
+  "output_labels": {
+    "roof_type": "Roof type",
+    "damage_type": "Damage",
+    "recommended_service": "Recommended service"
+  },
+  "severity_guide": [
+    "a few shingles worn or a gutter needs cleaning, nothing inside",
+    "a few missing or lifted shingles, no leak inside yet",
+    "a small leak inside after rain, or a damaged section of roof",
+    "an active leak with ceiling damage, or a large damaged area",
+    "a hole, collapse or sagging roof, or water pouring in"
+  ],
+  "policy": {
+    "finding_wording": "Roof damage visible from the ground, on-site roofer inspection recommended.",
+    "rules": [
+      "Never ask the homeowner to go on the roof, climb a ladder or go into the attic.",
+      "Describe what is visible from the ground; say 'likely' for any cause.",
+      "affected_area_m2 is the visibly damaged roof or ceiling area."
+    ]
+  },
+  "virtual_call_label": "Book a virtual roofing assessment"
+}

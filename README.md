@@ -1,323 +1,317 @@
-# Molsters
+# Scope × Homely Pro
 
-Molsters runs **Scope**: point your phone at a home problem, get it fixed.
+**Show us what's wrong. Get a real price from local pros in minutes.**
 
-1. The homeowner taps **Scan a problem** and the app guides the photos one shot at a time. Claude checks each one.
-2. A few tap-to-answer questions, then Claude writes a **JobSpec** (severity, area, confidence). It never prices.
-3. A typical price comes from the pros' own prices (set in their profile, ±15%), and the request goes out to **every matching pro nearby at once**.
-4. Each pro sends their own offer (any price + a time slot) from the **`/pro` dashboard** (laptop). Offers pop up on the phone, and the homeowner accepts one, Uber-style. The others close.
-5. The phone tracks the job (booked → on the way → done) and the homeowner rates it.
+Homeowners don't know what a "P-trap" or "flashing" is, so they can't describe a problem well enough to get a quote, and pros waste a site visit just to find out what the job is. Scope fixes both sides with Claude:
 
-It has four parts:
+- **Homeowners** type, say or photograph the problem. AI agents work out the trade, guide a few photos, ask plain-language questions and write a job spec with a best-guess price. Local pros send offers, and the homeowner books one, Uber-style.
+- **Pros** get a complete, photo-backed spec before they ever drive out. Their pricing agent quotes and sends offers for them within the limits they approve. Homely Pro, their dashboard, covers requests, calendar, bookings, reviews and analytics.
 
-| Folder | What it is |
+| | |
 | --- | --- |
-| `mobile/` | The homeowner app: Expo SDK 58, React Native, Expo Router. Runs in **Expo Go** on your iPhone. |
-| repo root | The API server and the `/pro` dashboard: Next.js 15, SQLite via better-sqlite3 + Drizzle, Claude via the Anthropic SDK. It runs on your computer and the phone talks to it over Wi-Fi. |
-| `shared/` | Types, pricing and the typed API client (`scope-client.ts`) used by the server, the app and `/pro`. |
-| `templates/` | Trade templates (`mold.json`, `plumbing_sink.json`). Server and app read the same files. |
-
-The Claude API key, database and photos stay on your computer. They're never shipped inside the app.
-
-The older open-board API (`/api/jobs`, support agents, messaging) is still in the server, but no screen uses it any more.
+| 📱 **Scope** (homeowner app) | Expo / React Native, runs on an iPhone |
+| 💻 **Homely Pro** (pro dashboard) | `/pro` on the Next.js server, runs on a laptop |
+| 🤖 **9 Claude agents** | intake, photo check, questions, spec, matching, estimate, pricing chat, profile interview, website reader |
+| 🇨🇦 **Canada-first** | prices in CA$, demo city Montréal, address type-ahead |
 
 ---
 
-## Scope: the homeowner flow (SOON26)
+## The 3-minute demo
 
-The Scope flow from `SOON26.md`, as the server implements it. The app in `mobile/` uses it through `mobile/src/services/http.ts`.
+1. **Phone → Home.** Three ways in: ⌨️ type it, 🎤 say it, 📷 show it. Say *"There's a leak under my kitchen sink."*
+2. **"Is this right?"** Claude says *It sounds like Plumbing: a leak under the kitchen sink*, with two other guesses and **Not quite** if it's wrong.
+3. **Guided photos.** One shot at a time. Claude checks each photo and asks for a retake if it's blurry, dark or shows the wrong thing.
+4. **Questions.** Claude writes 0–5 questions from what was said and photographed, in plain words ("the pipes under the sink", never "the shut-off valve").
+5. **Estimate.** A job spec (severity, hours, parts, confidence) and a price range in CA$. There's **always a best guess**, even when Claude is unsure.
+6. **Offers.** The request goes to every matching pro nearby at once. Pros whose pricing agent is live answer **instantly**; others send offers from their dashboard. Tap one to book.
+7. **Laptop → `/pro`.** Open the job: photos by shot, summary, answers and the agent's estimate breakdown. Send an offer, **Ask for more** (the phone gets a notification and rescans only that), then **On my way → Done**. The phone follows each step, and the homeowner rates the job.
+8. **Setup → Pricing.** Tell the pricing agent *"CA$120 call-out with the first hour, then CA$90 an hour, parts plus 15%, approve anything over CA$600 myself"*, then **Approve**. New requests under CA$600 now get offers automatically.
 
-1. **Home**: a big **Scan a problem** button, with the Home Record (every scan and job for this home) below it.
-2. **Scan**: full-screen camera, one shot at a time from the trade template. Claude (`claude-sonnet-5-5`, JSON-only, validated with zod) checks each photo. Blurry, dark, wrong subject, or a face or document in frame means a retake. Optional shots can be skipped with a reason ("There's no wall next to it").
-3. **Clarify**: the template's questions as tap chips, plus an optional note.
-4. **Spec**: Claude writes the JobSpec (title, summary, severity 1-5, area m², confidence 0-1, template fields). It never prices. The price is `(base + per_m2 × area) × severity_multiplier[severity-1]`, ±15%, from the provider's rate card (built from the prices they enter at the end of their profile interview), labelled "Estimate — confirmed by provider".
-5. **Matching**: providers for the trade within their radius, best rating first, then shortest ETA. **Get offers from N pros** sends the spec to all of them at once, with an optional preferred time. Each pro sends a price (pre-filled from their profile pricing, but any price) and a slot; the homeowner accepts one offer and every other offer closes. Pros can update or withdraw an offer, or pass.
-6. **Track**: polls every 2 s. Waiting → booked (slot + confirmed price) → on the way (ETA countdown) → done → 5-star rating, which updates the provider's rating.
-7. **Fallbacks**: confidence under 0.6 goes straight to human review with the spec attached. If no provider is in range, the homeowner can book a virtual call (Mold Busters for mold). If every pro passes, the homeowner is offered a virtual call.
+---
 
-**Adding a trade means adding a file** to `templates/` (`mold.json` and `plumbing_sink.json` ship). The format is checked by `templateSchema` in `shared/scope.ts`, and templates are re-read on every request in dev.
+## How it works
 
-**Demo data**: `npm run db:seed` creates five providers around `DEMO_LAT`/`DEMO_LNG` (default: downtown Montreal) and a "Demo house" for `customer@demo.com`. Northshore Mold Co is deliberately out of range. To move the demo to the venue, set both variables and run the seed again. Rate cards, profiles and ratings are kept. Other homeowner accounts set their home with `PUT /api/home`.
+### Homeowner flow (Scope app)
 
-### Connecting a UI
-
-Any UI (a Next page in this app, a separate web app, or the Expo app) can use **`shared/scope-client.ts`**. It's a typed client with one function per endpoint and no dependencies:
-
-```ts
-import { createScopeClient } from "@/shared/scope-client"; // or a relative path
-
-const api = createScopeClient({ baseUrl: "http://localhost:3000", getToken: () => localStorage.getItem("token") });
-const { token } = await api.auth.login("customer@demo.com", "password123"); // store it
-const { id } = await api.homeowner.startScan("mold");
-const scan = await api.homeowner.scan(id);                 // ScanResponse: render from scan.status
-await api.homeowner.uploadShot(id, scan.remainingShots[0], file);
-const queue = await api.pro(1).queue();                     // Mold Busters' dashboard
+```
+Sign in (phone or email + code) → Your name → Your home (location autofill + address type-ahead)
+        │
+Home: [⌨️ Type]  [🎤 Say it]  [📷 Show it]          ← pull to refresh everywhere
+        │
+"Is this right?"  ── trade + summary, 2 alternatives, "Not quite"
+        │
+Guided scan  ── one template shot at a time, Claude checks each, optional shots can be skipped
+        │
+Mark the spot  ── "move the dot to the leak"
+        │
+Questions  ── written by the questions agent (+ anything pros' pricing agents want asked)
+        │
+Estimate  ── job spec + CA$ range, matched pros ranked by fit
+        │
+Offers  ── live offers (auto from pricing agents + manual from pros) → accept one, others close
+        │
+Track  ── booked → on the way (ETA) → done → rate ★★★★★
 ```
 
-- **Same Next app:** use `baseUrl: ""`.
-- **Another origin** (Vite, Expo web, a tunnel): CORS is open for `/api/*`. Auth is a bearer token, never cookies. Set `CORS_ORIGINS` to restrict it.
-- **Errors** throw `ScopeApiError` with the server's message (safe to show) and `status`.
-- **Images:** use `api.photoSrc(photo)` for `<img src>`.
-- **No API key, or saving credits:** run `npm run dev:fake`. Shot checks and specs come back instantly and free:
-  - Any photo under 2 KB (e.g. a black frame) is rejected; anything else passes.
-  - A note containing "handoff" gives confidence 0.45, which goes to review.
-- **Health:** `GET /api/health` reports `{ ai: "claude" | "fake" | "missing_key" }`.
+Other paths:
 
-#### Homeowner screens → endpoints
+- **Talk to a person** on the estimate screen sends the job to human review.
+- **No pro in range** shows the best-guess estimate and offers a virtual call.
+- **Every pro passes** offers a virtual call.
+- **Cancel** works any time before the job is booked.
+- Low confidence never hands off automatically. It only adds a "Low confidence" badge for the pro.
 
-Every action returns the full `ScanResponse` unless noted. Render the screen from `scan.status` and `job.status`, and poll `GET /api/scans/:id` every 2 s.
+### Pro flow (Homely Pro, `/pro`)
 
-| Screen | Show when | Calls |
+| Section | Page | What it does |
 | --- | --- | --- |
-| Home | always | `GET /api/home` → `{ home, record }`. If `home` is null, `PUT /api/home { address, lat, lng }`. |
-| Pick trade | | `GET /api/templates`, then `POST /api/scans { trade }` → `{ id }` |
-| Scan | `scan.status = capturing` | Next shot = `remainingShots[0]` (prompt in `template.required_shots`). `POST /api/scans/:id/shots` (form: `shotId`, `photo`) → `ShotResult`; `ok:false` means show `message` and retake. Optional shots: `POST /skip { shotId }` → `ShotResult`. |
-| Clarify | `clarifying` | `POST /finish { answers: { [questionId]: option }, notes? }`. During an ask-for-more, only `scan.focus.questionIds` are asked. |
-| Spec | `spec_ready`, or `job.status = declined` | `spec`, `matches[]` (the pros the request will go to, each with `quote` and `slots`). `POST /request { slot? }` (`slot` = a `slots[].startsAt`, the preferred time), `POST /human`. If `matches` is empty: `GET /api/slots`, then `POST /virtual-call { slot? }`. |
-| Track | `submitted` | `job.status`: `open` (collecting offers: `offers[]` cheapest first, `invitedCount`, `passedCount`; `POST /offers/:offerId/accept`; if everyone passed, `POST /virtual-call`) · `pending` (`requestedSlot`) · `handoff` · `virtual_call` · `accepted` (slot, price) · `en_route` (`eta`) · `done` → `POST /rate { stars }` · `more_info` → `POST /reopen`, then back to Scan/Clarify. `POST /cancel` any time before accepted. |
+| Bookings | **Requests** | Open requests sent to this pro, jobs waiting on the homeowner, and jobs needing review. Send, update or withdraw an offer; pass; ask for more; route to a virtual call. |
+| | **Calendar** | Mon–Sat week grid of booked jobs; Google Calendar connect. |
+| | **Bookings** | Upcoming / Past. Job detail with the **agent's estimate** (call-out, extra time, parts, total), plus On my way / Done. |
+| | **Reviews** | Rating summary and every review with stars, note and service. |
+| | **Analytics** | Last 12 weeks: revenue, bookings, average job and rating vs the 12 weeks before; revenue/bookings chart; busiest days; top jobs. |
+| Setup | **Schedule** | Drag-to-paint working hours. Offer times are only ever inside them and never clash with booked jobs. |
+| | **Pricing** | Chat with the pricing agent. It drafts the rate card and the questions it wants homeowners asked; **Approve** makes it live. |
+| | **Profile** | A short AI interview (and optionally the pro's website) that writes the summary the matching agent reads. |
 
-All paths are under `/api/scans/:id`. `shared/scope.ts` has the labels (`JOB_STATUS_LABELS`, `ESTIMATE_LABEL`, `slotLabel`, `priceRange`).
+**Pricing model.** Each pro has a rate card:
 
-#### End-to-end tests
+> **price = call-out (includes the 1st hour) + (hours − 1) × hourly + parts × (1 + markup)**
 
-```bash
-npm run dev:fake      # terminal 1 (or npm run dev for real Claude)
-npm run test:e2e      # terminal 2: the API, every flow (E2E_BASE_URL=http://localhost:3001 for another port)
-npm run e2e           # terminal 2: the phone app's client + the /pro dashboard together
-```
+The spec agent estimates hours, complexity and parts for each job, so every pro's quote comes from the same job description and their own rates. When a pro's pricing is live and the quote is at or under their **approve-over** limit, an offer goes out automatically in their first free slot. Anything over the limit waits for the pro.
 
-`npm run e2e` runs the app's real API client (`mobile/src/services/http.ts`) as the homeowner and submits the `/pro` page's forms as the provider. It covers: a retake, a skip, requesting offers with a preferred time, ask for more (a shot and a question), two pros' offers (one far outside the rate card), accepting one, en route, done, rating, everyone passes → virtual call, talk to a person, cancel, the second trade, and the profile interview ending in a price change. It deletes its scans afterwards.
+### The AI agents
 
-`npm run test:e2e` drives every flow through the typed client:
+All agents use the Anthropic SDK with **structured outputs** (zod schemas through `messages.parse`), so every answer is typed and validated. The model is `claude-sonnet-5-5`; the legacy intake chat uses `claude-opus-5-5`.
 
-- happy path with a retake, skip, request, offers (send, update, withdraw), accept, en route, done and rating;
-- ask for more on an open request (offers go stale, then re-sent);
-- pass, and everyone passing;
-- human and low-confidence handoff;
-- no pro in range, leading to a virtual call;
-- the profile interview (questions, skip, pricing step) re-pricing the queue;
-- a cancel;
-- the second trade;
-- access control and CORS.
+| Agent | File | Job |
+| --- | --- | --- |
+| Intake classifier | `lib/scope/ai.ts` `classifyTrade` | Text (+ optional photo) → trade, summary and 2 alternatives |
+| Photo checker | `ai.ts` `checkShot` | Usable shot? Rejects blur, darkness, wrong subject, faces and documents |
+| Questions | `ai.ts` `writeQuestions` | 0–5 plain-language questions from what was said and photographed, plus the asks of pros who will see the job |
+| Spec | `ai.ts` `generateSpec` | Title, summary, severity 1–5, area, **hours, complexity, parts cost**, confidence, template fields; always a best guess |
+| Matching | `lib/scope/fit.ts` | Ranks in-range pros by how well their profile fits this problem |
+| Estimate | `lib/scope/estimate.ts` | A CA$ range when no pro is in range |
+| Pricing chat | `lib/scope/pricing-chat.ts` | Turns "how I charge" into a rate card and homeowner questions |
+| Profile interview | `lib/scope/profile.ts` | 4–8 tap-to-answer questions, then facts and a summary for matching |
+| Website reader | `lib/scope/website.ts` | Reads a pro's site and pulls out their services for the profile |
 
-It signs up a throwaway homeowner, then deletes that data and restores ratings, rate cards and profiles. Pass `-- --keep` to leave the data so you can look at it in a UI. With real Claude, AI-dependent checks become warnings (the test photos are drawings, so Claude often scores them below 0.6 and hands off).
+Shared prompt rule (`PLAIN_ASK`): *the homeowner has no trade knowledge, so only ask for what they can find and recognise.*
 
-### Pro side integration (`/pro`, no auth)
-
-The dashboard picks its provider with `?provider=<id>` (the seed prints the ids; Mold Busters is `1`). Every endpoint below takes that query parameter. Response types are in `shared/scope.ts` (`ProQueueResponse`, `ProJobDetail`, `ProProvider`, `ProfileView`, `RateCard`).
-
-| Method | Path | Body | Does |
-| --- | --- | --- | --- |
-| GET | `/api/pro/providers` | | All providers (for a picker) |
-| GET | `/api/pro/queue` | | Tabs `new` (open requests this pro was sent, with `myOffer`; pending; and more_info while the homeowner answers) · `review` (handoff, virtual_call) · `active` (accepted, en_route) · `done`. Each card has trade, title, severity, area, confidence, distance, age and a quote **priced with this provider's current profile pricing**. Poll every 2 s. |
-| GET | `/api/pro/jobs/:id` | | Spec detail: photos labelled by shot, summary, fields, answers, notes, quote, and time slots (the homeowner's requested time first, `id: "requested"`). The exact address appears once the job is this provider's. |
-| POST / DELETE | `/api/pro/jobs/:id/offer` | `{ slot: ISO, price }` | Open requests: send or update this pro's offer (any price $1–$100,000; `quote` is a suggestion). `DELETE` withdraws it. The phone shows it right away. |
-| POST | `/api/pro/jobs/:id/accept` | `{ slot: ISO, price }` | Pending, handoff and virtual-call jobs only (not open requests). → `accepted`; the phone shows the booking. |
-| POST | `/api/pro/jobs/:id/ask-more` | `{ shotIds, questionIds, message? }` | → `more_info`. The phone rescans only those items; the job then returns to `new` with a new spec version. |
-| POST | `/api/pro/jobs/:id/decline` | | Open request: pass (withdraws any offer; returns `{ passed: true }`, it leaves your queue). Pending/virtual call: → `declined`. |
-| POST | `/api/pro/jobs/:id/virtual-call` | | Needs review → route to a virtual call. |
-| POST | `/api/pro/jobs/:id/status` | `{ to: "en_route" \| "done" }` | Active-job stepper. `en_route` sets the ETA from distance. |
-| GET / POST | `/api/pro/profile` | `{ action: "start" \| "retry" \| "skip" }`, `{ action: "answer", answer: string[], note? }`, `{ action: "pricing", pricing: { callOut, perM2, severePct } }`, `{ action: "description", description }` | The profile interview (`lib/scope/profile.ts`): Claude asks 4-8 tap-to-answer questions, then writes facts and a summary the matching agent reads. `pricing` finishes it and becomes the rate card (`rateCardFromPricing`); new quotes use it immediately. |
-| GET | `photos[].src` | | Photo bytes. `src` is a signed link that works on its own for 24 h, so put it straight in `<img src>` (prefix the API origin if the UI is on another origin). `photos[].url?provider=<id>` also works. |
-
-Actions return the updated `ProJobDetail`. Errors are `{ error }` with 400/404/409. Server logic lives in `lib/scope/` (`pro.ts` for these endpoints).
+**Adding a trade is adding a JSON file** to `templates/`, which sets the shots, questions, outputs, severity guide and policy rules. The trades are mold, plumbing, electrical, handyman, roofing, painting, garden and appliances. Templates are validated by `templateSchema` in `shared/scope.ts`.
 
 ---
 
-## Prerequisites
+## Tech stack
 
-- **Node.js 20 or newer** (tested with Node 22) and npm.
-- **No C++ build tools are needed.** better-sqlite3 ships prebuilt binaries for Windows, macOS and Linux.
-- An **Anthropic API key** for the AI intake step. Everything else works without one.
+| Layer | Tech |
+| --- | --- |
+| Mobile app | Expo SDK 58, React Native, Expo Router, SWR, React Compiler, Reanimated, expo-camera / expo-audio / expo-location / expo-notifications |
+| Server + `/pro` | Next.js 15 (App Router, route handlers, server components and server actions), React 19 |
+| Database | SQLite (better-sqlite3) + Drizzle ORM |
+| AI | Claude via `@anthropic-ai/sdk` with zod structured outputs; OpenAI `gpt-4o-mini-transcribe` for speech-to-text (optional) |
+| Maps | OpenStreetMap: Photon (address type-ahead), Nominatim (geocoding and reverse geocoding). No API keys. |
+| Integrations | Google Calendar (OAuth, optional) |
+| Shared | `shared/` types, pricing maths and a typed API client used by the server, the app and the tests |
 
-## Run it locally
+```
+┌──────────── iPhone ────────────┐        ┌──────────── Laptop ─────────────────────┐
+│ Scope app (Expo)               │  HTTP  │ Next.js server                          │
+│  mobile/src/services/http.ts ──┼───────►│  /api/*  route handlers                 │
+│  (or an in-memory mock)        │ Wi-Fi  │  /pro    Homely Pro (server components) │
+└────────────────────────────────┘        │  lib/scope/*  agents + business logic   │
+                                          │  SQLite data/molsters.db, uploads/      │
+                                          └──────┬───────────────┬──────────────────┘
+                                                 │               │
+                                          Claude API     Photon / Nominatim, Google Calendar
+```
 
-All commands run from the project root (the folder with `package.json`).
+The API keys, database and photos stay on the laptop. Nothing secret ships inside the app.
 
-### 1. Install dependencies
+| Folder | What's in it |
+| --- | --- |
+| `mobile/` | The homeowner app. Screens are in `mobile/src/app` (Expo Router). |
+| `app/` | Next.js: `app/api/*` (REST API) and `app/pro/*` (Homely Pro). |
+| `lib/scope/` | Agents, matching, pricing chat, offers, pro pages and analytics. |
+| `db/` | Drizzle schema, seed and data migrations. |
+| `shared/` | Types, `cad()`, `quote()`, rate cards, and the typed client `scope-client.ts`. |
+| `templates/` | One JSON file per trade. |
+| `scripts/` | e2e tests and agent evals. |
+
+---
+
+## Quick start
+
+**You need:** Node.js 20+ (tested on 22), an iPhone with **Expo Go** (SDK 58) on the same Wi-Fi, and an Anthropic API key. No API key? Use `npm run dev:fake`, which gives instant, free, deterministic AI answers.
 
 ```bash
+# 1. Install
 npm install
-```
+cd mobile && npm install && cd ..
 
-### 2. Create your environment file
-
-If `.env.local` already exists, skip the copy (it may hold a secret you want to keep) and just check its values. Otherwise copy the example file:
-
-```powershell
-# Windows PowerShell
-if (-not (Test-Path .env.local)) { Copy-Item .env.example .env.local }
-```
-
-```bash
-# macOS / Linux / Git Bash
-[ -f .env.local ] || cp .env.example .env.local
-```
-
-Then open `.env.local` and fill in both values:
-
-| Variable | Required | What it is |
-| --- | --- | --- |
-| `SESSION_SECRET` | Yes | Random string of **at least 32 characters**, used to sign the login tokens the app stores. Without it, every request returns an error. |
-| `ANTHROPIC_API_KEY` | For AI intake | Get one at <https://console.anthropic.com>. If it's empty, the app still runs, but the photo-intake step shows "AI assistant isn't configured". |
-
-One way to generate a session secret:
-
-```bash
+# 2. Configure (keep an existing .env.local)
+[ -f .env.local ] || cp .env.example .env.local   # PowerShell: if (-not (Test-Path .env.local)) { Copy-Item .env.example .env.local }
+#    then set SESSION_SECRET (32+ chars) and ANTHROPIC_API_KEY:
 node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
-```
 
-### 3. Create the database and demo accounts
-
-```bash
+# 3. Database + demo data (safe to re-run)
 npm run setup
+
+# 4. Run
+npm run dev            # API + /pro on :3000 (or: npm run dev:fake)
+npm run mobile         # second terminal: Expo; scan the QR code with the iPhone camera
 ```
 
-This creates `data/molsters.db`, builds the tables and adds the demo users below. You can run it again safely; it won't create duplicates.
+Then:
 
-### 4. Start the API server
+- **Phone:** sign in with any phone number or email. The code is **7246** (nothing is sent; set `DEMO_LOGIN_CODE` to change it). New accounts are asked their name and home address.
+- **Laptop:** open <http://localhost:3000/pro> and pick a pro, or go to `/pro?provider=1` for Mold Busters. There's no sign-in on `/pro`, so only run it on a network you trust.
 
-```bash
-npm run dev
-```
+### Environment variables (`.env.local`)
 
-This listens on port 3000 on every network interface, so your phone can reach it. Leave it running.
+| Variable | Needed | What it does |
+| --- | --- | --- |
+| `SESSION_SECRET` | **Yes** | 32+ random characters; signs the app's login tokens |
+| `ANTHROPIC_API_KEY` | For real AI | Claude. Without it, use `npm run dev:fake`. |
+| `OPENAI_API_KEY` | Optional | Voice transcription. Without it, the voice screen offers "Pick the problem instead". |
+| `DEMO_LAT` / `DEMO_LNG` | Optional | Where the demo pros are seeded (default: downtown Montréal). Change and re-run `npm run db:seed` to move the demo to the venue. |
+| `DEMO_LOGIN_CODE` | Optional | The sign-in code (default `7246`) |
+| `SCOPE_FAKE_AI` | Optional | `1` = fake AI (same as `npm run dev:fake`) |
+| `CORS_ORIGINS` | Optional | Comma-separated origins allowed to call `/api` (empty = any) |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Optional | Google Calendar for pros (see below) |
 
-### 5. Install the app's dependencies
+The app finds the API on the computer Expo Go loaded it from, on port 3000. To point it somewhere else, put `EXPO_PUBLIC_API_URL=http://<ip>:3000` in `mobile/.env`. To work on the UI with no server, set `EXPO_PUBLIC_SCOPE_API=mock`.
 
-In a second terminal:
+### Demo pros
 
-```bash
-cd mobile
-npm install
-```
+`npm run db:seed` creates 17 pros around `DEMO_LAT`/`DEMO_LNG` and prints their `/pro?provider=` ids. Ratings, rate cards and profiles you change are kept on re-seed.
 
-### 6. Open it on your iPhone
+| Trade | Pros |
+| --- | --- |
+| Mold | **Mold Busters** (id 1, takes virtual calls), ClearSpore Remediation, Northshore Mold Co (deliberately out of range) |
+| Plumbing | Clearwater Plumbing (virtual calls), Pipeline Pros |
+| Electrical | Bright Spark Electric, Volt & Co |
+| Handyman / painting | Fix-It Fred, Odd Jobs Collective, Fresh Coat Painters |
+| Roofing | Northline Roofing, Summit Roof & Gutter |
+| Garden | Greenleaf Gardens, Yard Pros |
+| Appliances | ApplianceDoc, QuickFix Appliance |
+| Mold + plumbing | Justin Fan (id 6, a solo pro, outside the demo home's range) |
 
-1. Install **Expo Go** from the App Store. It must support SDK 58, so update it if it asks.
-2. Put the iPhone and the computer on the **same Wi-Fi network**.
-3. Start the app's dev server from `mobile/`:
+---
 
-   ```bash
-   npx expo start
-   ```
+## Testing
 
-4. Scan the QR code with the iPhone's **Camera** app and tap the banner to open it in Expo Go.
-5. When iOS asks whether Expo Go can **find devices on your local network**, tap **Allow**. Without it the app can't reach the server.
-6. There's no sign-in for the live demo. The app signs in as the demo homeowner (`customer@demo.com`, with the seeded "Demo house") by itself.
+| Command | What it checks |
+| --- | --- |
+| `npm run test:e2e` | **212 checks** across every API flow against a running server (`E2E_BASE_URL=http://localhost:3100` for another port): sign-up, address type-ahead, happy path (retake, skip, questions, spec, offers, accept, en route, done, rating), ask for more, pass, human handoff, low confidence still priced, no pro in range, profile interview, pricing chat → approve → auto offers, the second trade, access control and CORS. Cleans up after itself; pass `-- --keep` to keep the data. |
+| `npm run e2e` | The phone app's real API client plus `/pro` form submissions, end to end |
+| `npm run eval:agents` | Real-Claude evals of the agents: no jargon in questions, always an estimate, pricing-chat parsing, and more |
+| `npm run typecheck` | Server types (`cd mobile && npx tsc --noEmit` for the app) |
+| `npm run lint` | ESLint |
 
-The app finds the server automatically. It uses the computer address that Expo Go loaded the app from, on port 3000. To use a different server, create `mobile/.env` with `EXPO_PUBLIC_API_URL=http://<ip>:3000` and restart `npx expo start`. To work on the UI without a server, set `EXPO_PUBLIC_SCOPE_API=mock` instead: the app then runs on the in-memory mock in `mobile/src/services/mock`.
+With `npm run dev:fake`:
 
-#### Windows: allow Node through the firewall
+- Any photo under 2 KB is rejected and everything else passes.
+- A note containing "handoff" gives confidence 0.45.
+- Voice returns a fixed sentence.
 
-The first time, Windows may show a firewall prompt for Node.js. Tick **Private networks** and allow it. If you missed the prompt, run this once in an **administrator** PowerShell:
+With real Claude, AI-dependent e2e checks become warnings, because the test photos are drawings.
+
+---
+
+## API reference
+
+All endpoints are JSON under `/api`. Homeowner routes need `Authorization: Bearer <token>`. Pro routes take `?provider=<id>`. Errors are `{ error }` with a status of 400, 401, 404 or 409, and the message is safe to show. Types are in `shared/scope.ts`, and `shared/scope-client.ts` has one typed function per endpoint.
+
+<details>
+<summary><b>Homeowner</b></summary>
+
+| Method | Path | Does |
+| --- | --- | --- |
+| POST | `/auth/code` → `/auth/code/verify` | Sign in with phone/email + code → `{ token, isNew }` |
+| GET / PUT | `/profile` | Name, age, address, home type. A new address is geocoded unless `lat`/`lng` are sent (picked suggestion or current location). |
+| GET | `/geocode/search?q=` | Address type-ahead (Photon), up to 5 `{ address, line1, line2, lat, lng }`, biased to the home's area |
+| GET | `/geocode/reverse?lat=&lng=` | Current location → street address |
+| POST | `/intake/transcribe`, `/intake/classify` | Voice → text; text (+ photo) → trade with alternatives |
+| GET | `/home`, `/templates` | Home + Home Record; available trades |
+| POST | `/scans` `{ trade, description? }` | Start a scan → `{ id }` |
+| GET | `/scans/:id` | Everything the scan screens render. Poll every 2 s while tracking. |
+| POST | `/scans/:id/shots`, `/skip`, `/mark` | Upload a shot (Claude checks it), skip an optional one, mark the spot |
+| GET | `/scans/:id/questions` | The questions agent's questions |
+| POST | `/scans/:id/finish` `{ answers, notes? }` | → job spec, estimate and matched pros |
+| POST | `/scans/:id/request` `{ slot? }` | Send to every matched pro (auto offers fire here) |
+| POST | `/scans/:id/offers/:offerId/accept` | Book an offer; the others close |
+| POST | `/scans/:id/human`, `/virtual-call`, `/reopen`, `/cancel`, `/rate` | Talk to a person, virtual call, answer ask-for-more, cancel, rate |
+
+</details>
+
+<details>
+<summary><b>Pro</b> (<code>?provider=&lt;id&gt;</code>)</summary>
+
+| Method | Path | Does |
+| --- | --- | --- |
+| GET | `/pro/providers`, `/pro/queue` | Pick a pro; their queue (`new`, `review`, `active`, `done`) |
+| GET | `/pro/jobs/:id` | Spec detail with photos, answers, quote breakdown and free slots |
+| POST / DELETE | `/pro/jobs/:id/offer` `{ slot, price }` | Send/update or withdraw an offer |
+| POST | `/pro/jobs/:id/accept`, `/decline`, `/ask-more`, `/virtual-call`, `/status` | Book, pass, ask for more, route to a virtual call, en route / done |
+| GET / POST | `/pro/pricing` | Pricing chat: `{ action: "message", message }`, `{ action: "approve" }` |
+| GET / PUT | `/pro/hours` | Working hours (7 days × 48 half-hours) |
+| GET / POST | `/pro/profile` | The profile interview and website |
+
+</details>
+
+The older open-board API (`/api/jobs`, support agents, messaging) is still there, but no screen uses it.
+
+---
+
+## More setup
+
+<details>
+<summary><b>Windows firewall</b></summary>
+
+Allow Node.js on **Private networks** when Windows asks, or run this once in an administrator PowerShell:
 
 ```powershell
 New-NetFirewallRule -DisplayName "Node.js (Molsters dev)" -Direction Inbound -Program "C:\Program Files\nodejs\node.exe" -Action Allow -Profile Private
 ```
 
-This covers both the API (port 3000) and Expo's dev server (port 8081). Your Wi-Fi must be set to a **Private** network in Windows settings.
+Your Wi-Fi must be a **Private** network.
 
-### 7. Open the provider dashboard on your laptop
+</details>
 
-Open <http://localhost:3000/pro> and pick a provider, or go straight to `http://localhost:3000/pro?provider=<id>` (the seed prints the ids; Mold Busters is `1`). There's no sign-in: the `?provider=` id picks who you are, so only run this on a network you trust.
+<details>
+<summary><b>Google Calendar for pros (optional)</b></summary>
 
-| Tab | What it does |
-| --- | --- |
-| New / Needs review / Active / Done | The provider's queue: trade, severity, area, price range, distance, confidence and age. *Needs review* holds handoffs (low confidence, or the homeowner asked for a person) and virtual calls. Jobs waiting on the homeowner stay in *New*, badged. |
-| Spec (click a card) | Photos by shot, AI summary, extracted fields, answers, notes and the price from your profile pricing. Open requests: **Send offer** (the homeowner's preferred time is pre-selected; price pre-filled from your profile pricing, any amount allowed), **Withdraw**, **Pass**. Handoffs and virtual calls: **Accept**. **Ask for more** (pick template shots and questions, or write a request; the homeowner's phone shows a notification), **Decline**. Handoffs can be routed to a virtual call. |
-| Active job | Status stepper and the visit in **Google Calendar**: added automatically if you connected it, otherwise an **Add to Google Calendar** link. Advancing the status updates the homeowner's screen. |
-| 📅 Connect Google Calendar (top right) | Connect the provider's Google account once; every job they accept from then on becomes an event in their calendar. Needs the setup below. |
-| Profile | A short AI interview: one tap-to-answer question at a time (with an optional note), adapted to the pro's trades and earlier answers, 4-8 questions. It writes structured facts (specialties, job sizes, availability) and a summary the matching agent uses to route requests, then asks for prices (call-out fee, per m², extra for severe jobs), which set the suggested price on every spec. Until it's done, every view shows a **Finish profile** banner. |
+1. In [Google Cloud Console](https://console.cloud.google.com/), enable the **Google Calendar API**.
+2. Set up an *External* OAuth consent screen and add your account under **Test users**.
+3. Create an **OAuth client ID** (Web application) with the redirect URI `http://localhost:3000/pro/google/callback`.
+4. Put `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` in `.env.local`, restart, open `/pro` **on `localhost:3000`**, and click **Connect Google Calendar** on the Calendar page.
 
-The page refreshes every 3 seconds.
+Accepted jobs become events (scope `calendar.events` only). **Disconnect** revokes the token. Without Google, each booking has an **Add to Google Calendar** link instead.
 
-#### Google Calendar (optional)
+</details>
 
-Without this, `/pro` shows a setup hint and keeps the **Add to Google Calendar** link. To connect a real calendar:
+<details>
+<summary><b>Notifications</b></summary>
 
-1. In [Google Cloud Console](https://console.cloud.google.com/), create a project (or pick one) and enable the **Google Calendar API**.
-2. **OAuth consent screen:** choose *External*, fill in the app name and your email, and add the Google account(s) you'll connect under **Test users**. While the app is in *Testing*, only test users can connect.
-3. **Credentials → Create credentials → OAuth client ID → Web application.** Under **Authorized redirect URIs**, add `http://localhost:3000/pro/google/callback` (use the port your server runs on).
-4. Copy the client ID and secret into `.env.local`:
+When a pro uses **Ask for more**, the phone shows a local notification that opens the rescan. Expo Go can't receive remote push (SDK 53+), so the notification shows while the app is open or was just switched away, and the home screen banner covers the rest.
 
-   ```bash
-   GOOGLE_CLIENT_ID=…apps.googleusercontent.com
-   GOOGLE_CLIENT_SECRET=…
-   ```
-
-5. Restart `npm run dev`, open `/pro?provider=1` **at `http://localhost:3000`** (the redirect URI must match), and click **📅 Connect Google Calendar**. Google warns that the app isn't verified; that's expected for a test app (**Continue**).
-
-Scope only asks to manage events (`calendar.events`). The refresh token is stored in the local database (`providers.google_refresh_token`); **Disconnect** revokes it. If Google is unreachable when a job is accepted, the booking still goes through and `/pro` says why the event wasn't added.
-
-#### Notifications on the phone
-
-When a pro uses **Ask for more**, the app shows a notification ("Mold Busters needs a bit more"); tapping it opens the rescan. Allow notifications when the app first asks. Expo Go can't receive real push notifications (SDK 53+), so this is a local notification raised by the app: it shows while the app is open or was just switched away, and the home-screen banner covers the rest. Push to a closed app needs a development build (paid Apple Developer account + EAS).
-
----
-
-## Demo accounts
-
-The app signs in as **`customer@demo.com`** (password **`password123`**). The seed also prints the Scope providers and their `/pro` ids:
-
-| `/pro?provider=` | Provider | Notes |
-| --- | --- | --- |
-| `1` | Mold Busters | Mold. Takes virtual calls when nobody else is in range. |
-| `2` | ClearSpore Remediation | Mold. Smaller radius. |
-| `3` | Northshore Mold Co | Mold. Deliberately out of range. |
-| `4` | Clearwater Plumbing | Leaking sink. Takes virtual calls. |
-| `5` | Pipeline Pros | Leaking sink. |
-
-The seed still creates the older accounts (`agent@demo.com`, `plumber@demo.com`, `electrician@demo.com`, `hvac@demo.com`) for the open-board API.
-
-### Try the full flow
-
-1. On the phone, tap **Scan a problem** → **Mold or damp spot**, take the photos and answer the questions.
-2. Book **Mold Busters** and pick a time.
-3. On the laptop, open `/pro?provider=1`. The job is in **New** with your time pre-selected. Try **Ask for more**: the phone shows a banner, rescans only what was asked and sends the updated spec back.
-4. **Accept**, then **On my way** and **Mark done**. The phone follows each step. Rate the job on the phone.
-5. Other paths: **Decline** (the phone offers the next pro), **Talk to a person instead** on the estimate screen (lands in *Needs review*), and **Cancel request** while waiting.
-
----
-
-## Scripts
-
-| Command | What it does |
-| --- | --- |
-| `npm run dev` | Start the API server on port 3000, reachable from your phone |
-| `npm run dev:fake` | Same, with the fake AI (no API key or credits needed) |
-| `npm run test:e2e` | End-to-end test of the Scope API (every flow) against a running server |
-| `npm run mobile` | Start the Expo dev server (same as `cd mobile && npx expo start`) |
-| `npm run build` | Build for production |
-| `npm start` | Run the production API build (run `npm run build` first) |
-| `npm run e2e` | End-to-end test of the phone app's client + the `/pro` dashboard against a running server. Cleans up after itself. |
-| `npx tsx scripts/calendar.test.ts` | Check the Google Calendar connection logic against a fake Google |
-| `npm run typecheck` | Check the server's types (`cd mobile && npm run typecheck` for the app) |
-| `npm run lint` | Run ESLint |
-| `npm run setup` | Run `db:push` and then `db:seed` |
-| `npm run db:push` | Create or update the database tables from `db/schema.ts` |
-| `npm run db:seed` | Add the demo accounts |
+</details>
 
 ## Where data lives
 
-- **Database:** `data/molsters.db`, a SQLite file. It isn't committed to git.
-- **Uploaded photos:** `uploads/scan-<id>/` (and `uploads/job-<id>/` for the older API). Not committed either. Limits: 8 MB per photo, and JPEG, PNG, WebP or GIF only. The app converts photos to JPEG before uploading.
+- `data/molsters.db`: the SQLite database. `npm run setup` creates it and runs the data migrations (e.g. locksmith → roofing, old rate cards → hourly).
+- `uploads/scan-<id>/`: photos, up to 8 MB each, JPEG/PNG/WebP/GIF.
 
-**To start fresh:** stop the server, delete `data/molsters.db` and any `data/molsters.db-*` files (plus `uploads/scan-*` and `uploads/job-*` if you want), then run `npm run setup` again.
+Neither is committed. **To start fresh:** stop the server, delete `data/molsters.db*` (and `uploads/scan-*`), then run `npm run setup`.
 
 ## Troubleshooting
 
-- **The app says it can't reach the server.** Check each of these:
-  - `npm run dev` is running.
-  - The phone and computer are on the same Wi-Fi.
-  - Expo Go has Local Network access (iPhone Settings → Expo Go).
-  - The Windows firewall allows Node (see step 6).
-
-  The error message shows the server address the app is using. To test the network, open `<that address>/api/health` in Safari on the phone. A short JSON reply means the network is fine.
-- **`npx expo start --tunnel` doesn't reach the server.** A tunnel only forwards the app bundle, not the API. Use the same Wi-Fi, or set `EXPO_PUBLIC_API_URL` to an address the phone can reach.
-- **Every request fails with an error about `SESSION_SECRET`.** The value in `.env.local` is missing or shorter than 32 characters. Fix it and restart `npm run dev`.
-- **"AI assistant isn't configured" during a scan.** Set `ANTHROPIC_API_KEY` in `.env.local` and restart the dev server (env files are only read at startup), or use `npm run dev:fake`.
-- **Port 3000 is already in use.** Run `npm run dev -- -p 3001` and open http://localhost:3001.
-- **Requests return 500 with errors like `routes-manifest.json` / `_document.js` not found, or `Cannot find module './vendor-chunks/...'`.** The `.next` build folder is out of date or corrupted. This usually happens when `next build` and `next dev` ran at the same time. Stop every running server, delete the `.next` folder, and start `npm run dev` again.
-- **"no such table" errors.** You skipped step 3. Run `npm run setup`.
-- **The database or photos end up in an odd place.** Paths are relative to the folder you start the app from, so always run commands from the project root.
+- **The app can't reach the server.** Check that `npm run dev` is running, both devices are on the same Wi-Fi, Expo Go has Local Network access, and the firewall allows Node. Open `<address>/api/health` in Safari on the phone; a JSON reply means the network is fine.
+- **`--tunnel` doesn't reach the API.** Tunnels only forward the app bundle. Use the same Wi-Fi or set `EXPO_PUBLIC_API_URL`.
+- **Errors about `SESSION_SECRET`.** It's missing or shorter than 32 characters. Fix it and restart.
+- **"AI assistant isn't configured".** Set `ANTHROPIC_API_KEY` and restart (env files are read at startup), or use `npm run dev:fake`.
+- **No address suggestions.** Photon is a free public service. If it's unreachable the field still works as plain text, and the server geocodes the address on save.
+- **Port 3000 is busy.** Run `npm run dev -- -p 3001`.
+- **500s mentioning `routes-manifest.json` or `vendor-chunks`.** Stop all servers, delete `.next/`, and start again.
+- **"no such table".** Run `npm run setup`.

@@ -5,10 +5,11 @@ import type { Provider, ScopeJob } from "@/db/schema";
 import { HttpError } from "@/lib/auth";
 import {
   OFFER_MAX_PRICE,
+  cad,
   PRO_TABS,
+  needsApproval,
   profileStatus,
-  suggestedQuote,
-  suggestionFor,
+  quote,
   type MoreInfoRequest,
   type OfferInfo,
   type ProJobDetail,
@@ -16,13 +17,20 @@ import {
   type ProQueueCard,
   type ProTab,
   type Slot,
+  type WeekHours,
 } from "@/shared/scope";
 import { addEvent, googleConfig } from "./calendar";
 import { distanceKm, etaMinutes, slotsFor, virtualPartner } from "./matching";
-import { bestPhotos, isBroadcast, jobInfo, moveJob, offerInfo, parseSlot, photoInfo, scanInfo, scanPhotoRows, specInfo } from "./service";
+import { bestPhotos, isBroadcast, jobInfo, moveJob, offerInfo, parseSlot, photoInfo, scanInfo, scanPhotoRows, scanTemplate, specInfo } from "./service";
 import { getTemplate } from "./templates";
 
-const { providers, scopeJobs, jobSpecs, scans, homes, offers, ratings } = schema;
+const { providers, scopeJobs, jobSpecs, scans, homes, offers, ratings, users } = schema;
+
+/** The homeowner's name for a pro: in full once the job is theirs, else just the first name. */
+export function clientName(customerId: number, full: boolean) {
+  const name = db.select({ name: users.name }).from(users).where(eq(users.id, customerId)).get()?.name?.trim() || "Homeowner";
+  return full ? name : name.split(/\s+/)[0];
+}
 
 const ratingOf = (jobId: number) => db.select().from(ratings).where(eq(ratings.jobId, jobId)).get()?.stars ?? null;
 
@@ -113,8 +121,9 @@ export function queue(p: Provider): Record<ProTab, ProQueueCard[]> {
       severity: s.severity,
       areaM2: s.areaM2,
       confidence: s.confidence,
-      quote: suggestedQuote(p.rateCard, s, suggestionFor(s, p.id)?.adjustPct),
-      priceReason: suggestionFor(s, p.id)?.reason ?? null,
+      quote: quote(p.rateCard, s),
+      needsApproval: needsApproval(p.rateCard, quote(p.rateCard, s)),
+      client: clientName(r.homes.customerId, r.scope_jobs.providerId === p.id),
       distanceKm: Math.round(distanceKm(r.homes, p) * 10) / 10,
       myOffer: myOffer(p, r.scope_jobs.id, r.homes),
       invitedCount: r.scope_jobs.invited.length,
@@ -133,7 +142,8 @@ export function queue(p: Provider): Record<ProTab, ProQueueCard[]> {
 
 export function jobDetail(p: Provider, jobId: number): ProJobDetail {
   const { job, scan, home, spec } = loadJob(p, jobId);
-  const template = getTemplate(scan.trade);
+  // Includes the questions the agent wrote for this scan, so the pro sees (and can re-ask) them.
+  const template = scanTemplate(getTemplate(scan.trade), scan);
   const rows = scanPhotoRows(scan.id);
   return {
     job: jobInfo(job, home),
@@ -143,15 +153,25 @@ export function jobDetail(p: Provider, jobId: number): ProJobDetail {
     home: job.providerId === p.id ? { address: home.address, lat: home.lat, lng: home.lng } : { address: "Shown after you accept", lat: home.lat, lng: home.lng },
     photos: photoInfo(bestPhotos(template, rows)),
     spec: specInfo(spec),
-    quote: suggestedQuote(p.rateCard, spec, suggestionFor(spec, p.id)?.adjustPct),
-    priceReason: suggestionFor(spec, p.id)?.reason ?? null,
-    slots: withRequested(slotsFor(), job.requestedSlot),
+    quote: quote(p.rateCard, spec),
+    needsApproval: needsApproval(p.rateCard, quote(p.rateCard, spec)),
+    client: clientName(home.customerId, job.providerId === p.id),
+    slots: withRequested(slotsFor(p, spec), job.requestedSlot),
     myOffer: myOffer(p, job.id, home),
     invitedCount: job.invited.length,
     answers: template.questions.filter((q) => scan.answers[q.id]).map((q) => ({ id: q.id, q: q.q, answer: scan.answers[q.id] })),
     calendarLink: job.providerId === p.id ? job.calendarLink : null,
     fitReason: spec.fit?.find((f) => f.providerId === p.id)?.reason ?? null,
   };
+}
+
+// ---------- Working hours ----------
+
+/** /pro → Schedule. 7 days × 48 half-hours; offers and slots only fall inside them. */
+export function saveHours(p: Provider, hours: unknown) {
+  const ok = Array.isArray(hours) && hours.length === 7 && hours.every((d) => Array.isArray(d) && d.length === 48 && d.every((c) => typeof c === "boolean"));
+  if (!ok) throw new HttpError(400, "Couldn't read those hours. Try again.");
+  db.update(providers).set({ hours: hours as WeekHours }).where(eq(providers.id, p.id)).run();
 }
 
 // ---------- Google Calendar ----------
@@ -169,7 +189,7 @@ export async function addToCalendar(p: Provider, jobId: number): Promise<string 
   const virtual = d.job.mode === "virtual";
   const link = await addEvent(cfg, p.googleRefreshToken, {
     summary: `${virtual ? "Virtual call" : "Visit"}: ${d.spec.title}`,
-    description: [`Scope job #${d.job.id} (${d.template.label})`, d.spec.summary, d.job.price != null ? `Confirmed price: $${d.job.price}` : null].filter(Boolean).join("\n\n"),
+    description: [`Scope job #${d.job.id} (${d.template.label})`, d.spec.summary, d.job.price != null ? `Confirmed price: ${cad(d.job.price)}` : null].filter(Boolean).join("\n\n"),
     location: virtual ? "Virtual call" : d.home.address,
     start: new Date(d.job.slot),
     minutes: virtual ? 30 : 120,
@@ -186,7 +206,7 @@ function withRequested(slots: Slot[], requested: Date | null): Slot[] {
 }
 
 function checkPrice(price: number) {
-  if (!Number.isFinite(price) || price < 1 || price > OFFER_MAX_PRICE) throw new HttpError(400, `Enter a price between $1 and $${OFFER_MAX_PRICE.toLocaleString("en-US")}.`);
+  if (!Number.isFinite(price) || price < 1 || price > OFFER_MAX_PRICE) throw new HttpError(400, `Enter a price between CA$1 and ${cad(OFFER_MAX_PRICE)}.`);
   return Math.round(price);
 }
 
@@ -226,7 +246,7 @@ export function withdrawOffer(p: Provider, jobId: number) {
 
 export function askForMore(p: Provider, jobId: number, input: MoreInfoRequest) {
   const { job, scan } = loadJob(p, jobId);
-  const t = getTemplate(scan.trade);
+  const t = scanTemplate(getTemplate(scan.trade), scan);
   const shotIds = [...new Set(input.shotIds)].filter((id) => t.required_shots.some((s) => s.id === id));
   const questionIds = [...new Set(input.questionIds)].filter((id) => t.questions.some((q) => q.id === id));
   const message = input.message?.trim() || null;

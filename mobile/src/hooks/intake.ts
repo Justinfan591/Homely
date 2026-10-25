@@ -7,13 +7,18 @@ import { getTemplate } from "@/templates";
  * What the homeowner said or showed on the "Tell us" screens, handed from one screen to the next.
  * In memory only: it's a few seconds' worth of state, and a fresh start is fine after a restart.
  */
-export const intake: { text: string; photoUri: string | null; result: Classification | null } = {
+/** Which home-screen button the homeowner used: each one is its own path to "Is this right?". */
+export type IntakeSource = "type" | "voice" | "photo";
+
+export const intake: { source: IntakeSource; text: string; photoUri: string | null; result: Classification | null } = {
+  source: "voice",
   text: "",
   photoUri: null,
   result: null,
 };
 
-export function resetIntake() {
+export function resetIntake(source: IntakeSource = intake.source) {
+  intake.source = source;
   intake.text = "";
   intake.photoUri = null;
   intake.result = null;

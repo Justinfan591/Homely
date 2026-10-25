@@ -84,6 +84,7 @@ export default function Listening() {
       await setAudioModeAsync({ allowsRecording: false }).catch(() => {});
       const uri = recorder.uri;
       if (!uri || Date.now() - startedAt.current < 800) throw new Error("That was a bit short. Tell us a little more about it.");
+      intake.source = "voice";
       intake.text = await api.transcribe(uri);
       intake.photoUri = null;
       // Straight to the AI's guess: talking is enough, no photo needed yet.

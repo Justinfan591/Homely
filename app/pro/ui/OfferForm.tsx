@@ -1,5 +1,5 @@
 import type { Provider } from "@/db/schema";
-import { slotLabel, usd, type ProJobDetail, type ProTab } from "@/shared/scope";
+import { slotLabel, cad, type ProJobDetail } from "@/shared/scope";
 import { accept, askMore, decline, offer, virtualCall, withdraw } from "../actions";
 
 /**
@@ -7,7 +7,7 @@ import { accept, askMore, decline, offer, virtualCall, withdraw } from "../actio
  * Open requests send an offer; pending, handoff and virtual-call jobs are accepted directly.
  * This is the only form on the page with price and slot inputs (scripts/e2e.ts reads the first of each).
  */
-export function Actions({ d, p, tab }: { d: ProJobDetail; p: Provider; tab: ProTab }) {
+export function Actions({ d, p, tab }: { d: ProJobDetail; p: Provider; tab: string }) {
   const { job, quote, template } = d;
   const status = job.status;
   const open = status === "open";
@@ -53,13 +53,13 @@ export function Actions({ d, p, tab }: { d: ProJobDetail; p: Provider; tab: ProT
           ))}
         </fieldset>
         <label className="field">
-          Your price (USD)
+          Your price (CAD)
           <span className="priceinput">
             <b>$</b>
-            <input type="number" name="price" min={1} step="1" defaultValue={myOffer?.price ?? quote.price} required aria-label="Price in US dollars" />
+            <input type="number" name="price" min={1} step="1" defaultValue={myOffer?.price ?? quote.price} required aria-label="Price in Canadian dollars" />
           </span>
         </label>
-        <p className="muted small">Suggested {usd(quote.price)}. You can set any price.</p>
+        <p className="muted small">Suggested {cad(quote.price)}. You can set any price.</p>
         <button className="btn primary big">{label}</button>
       </form>
 

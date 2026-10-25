@@ -32,6 +32,12 @@ export const useScan = (scanId: string) => {
   return useSWR(["scan", scanId, visit], () => api.getScan(scanId), { revalidateOnFocus: false });
 };
 
+/** The scan's follow-up questions (the questions agent writes them the first time). */
+export const useQuestions = (scanId: string) => {
+  const visit = useVisit();
+  return useSWR(["questions", scanId, visit], () => api.getQuestions(scanId), { revalidateOnFocus: false });
+};
+
 /** Polls every 2s until the job is finished. */
 export const useJob = (jobId: string) =>
   useSWR(["job", jobId], () => api.getJob(jobId), {

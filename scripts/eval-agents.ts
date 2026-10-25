@@ -26,6 +26,8 @@ const VERBOSE = arg("--verbose") > 0;
 type Row = { agent: string; name: string; run: number; pass: boolean; detail: string };
 const rows: Row[] = [];
 const banned = /\bis mold\b|black mold|toxic|\$/i;
+/** Trade terms a homeowner may not know (PLAIN_ASK in lib/scope/ai.ts). */
+const JARGON = /shut-?off valve|p-?trap|supply line|breaker|gfci|flashing|soffit|joist|subfloor/i;
 
 async function check(agent: string, name: string, fn: () => Promise<string | void>) {
   for (let run = 1; run <= RUNS; run++) {
@@ -84,14 +86,14 @@ const BLACK = solidPng([0, 0, 0]);
 
 async function main() {
   // Imported after the env is loaded: the agents read it at call time, the DB at import.
-  const { aiMode, checkShot, generateSpec } = await import("../lib/scope/ai");
+  const { aiMode, checkShot, generateSpec, writeQuestions } = await import("../lib/scope/ai");
   const { rankFit } = await import("../lib/scope/fit");
-  const { suggestPrices } = await import("../lib/scope/pricing");
+  const { pricingState, pricingTurn } = await import("../lib/scope/pricing-chat");
   const { nextStep } = await import("../lib/scope/profile");
   const { getTemplate } = await import("../lib/scope/templates");
   const { distanceKm, etaMinutes } = await import("../lib/scope/matching");
   const { db, schema } = await import("../db");
-  const { FIT_MIN, HANDOFF_CONFIDENCE, PRICE_ADJUST_MAX, PROFILE_MAX_QUESTIONS, PROFILE_MIN_QUESTIONS } = await import("../shared/scope");
+  const { FIT_MIN, HANDOFF_CONFIDENCE, PROFILE_MAX_QUESTIONS, PROFILE_MIN_QUESTIONS } = await import("../shared/scope");
   type Provider = typeof schema.providers.$inferSelect;
   type GeneratedSpec = Awaited<ReturnType<typeof generateSpec>>;
   type ProfileTurn = Parameters<typeof nextStep>[1][number];
@@ -193,7 +195,7 @@ async function main() {
     if (baseline) expect(Math.abs(s.severity - baseline.severity) <= 1, `severity moved from ${baseline.severity} to ${s.severity}`);
     return `sev ${s.severity}, conf ${s.confidence}`;
   });
-  await check("spec", "mold photos in a sink scan go to a human", async () => {
+  await check("spec", "mold photos in a sink scan: low confidence, still estimated", async () => {
     const s = await generateSpec({
       template: sink,
       photos: [
@@ -207,12 +209,14 @@ async function main() {
     });
     show("spec", s);
     expect(s.confidence < HANDOFF_CONFIDENCE, `confidence ${s.confidence} (should be below ${HANDOFF_CONFIDENCE})`);
-    return `conf ${s.confidence}`;
+    // Always a quote: even unsure, the agent gives its best hours and parts.
+    expect(s.hours > 0 && s.partsCost >= 0, `no estimate when unsure (${s.hours} h, CA$${s.partsCost})`);
+    return `conf ${s.confidence}, ${s.hours} h, CA$${s.partsCost} parts`;
   });
 
   // ---------- 3. Matching ----------
   console.log("\n3. Matching");
-  const spec = (s: Partial<GeneratedSpec>): GeneratedSpec => ({ title: "", summary: "", severity: 3, areaM2: 1, confidence: 0.85, fields: {}, ...s });
+  const spec = (s: Partial<GeneratedSpec>): GeneratedSpec => ({ title: "", summary: "", severity: 3, areaM2: 1, hours: 2, complexity: "medium", partsCost: 0, confidence: 0.85, fields: {}, ...s });
   const severeBasement = spec({
     title: "Growth across basement walls",
     summary: "Visible growth likely across most of the unfinished basement's concrete walls and the wooden joists above, after a flood last spring. Standing water by the floor drain. Testing recommended.",
@@ -276,37 +280,20 @@ async function main() {
     return `injected pro at #${fit.findIndex((f) => f.providerId === injector.id) + 1}, score ${inj?.score} (hidden below ${FIT_MIN})`;
   });
 
-  // ---------- 4. Pricing ----------
-  console.log("\n4. Pricing");
-  const price = async (template: typeof mold, s: GeneratedSpec, ps: Provider[]) => {
-    const out = await suggestPrices({ template, spec: s, answers: {}, notes: null, providers: ps });
-    expect(out, "the pricing agent failed (see the error above)");
-    show("suggestions", out.map((x) => `${ps.find((p) => p.id === x.providerId)?.name} ${x.adjustPct}: ${x.reason}`));
-    expect(out.length === ps.length, `priced ${out.length} of ${ps.length} pros`);
-    for (const x of out) {
-      expect(Math.abs(x.adjustPct) <= PRICE_ADJUST_MAX, `adjustment ${x.adjustPct}`);
-      expect(!/\$|%|\d+\s*percent/i.test(x.reason), `reason mentions money or percentages: ${x.reason}`);
-      expect(!banned.test(x.reason), `reason breaks wording rules: ${x.reason}`);
-    }
-    return out;
-  };
-  await check("pricing", "standard faucet drip → small adjustments", async () => {
-    const out = await price(sink, faucetLeak, forTrade("plumbing_sink"));
-    for (const x of out) expect(Math.abs(x.adjustPct) <= 10, `${x.adjustPct} for a standard drip: ${x.reason}`);
-    return out.map((x) => x.adjustPct).join(", ");
-  });
-  await check("pricing", "high ceiling + active leak → priced up", async () => {
-    const hard = spec({
-      title: "Staining on stairwell ceiling",
-      summary: "Dark staining across the stairwell ceiling, about 4 m up, around a wet patch where water is actively dripping from the bathroom above. Visible growth likely, testing recommended.",
-      severity: 3,
-      areaM2: 1.5,
-      fields: { likely_moisture_source: "Active leak from the bathroom above", recommended_service: "Testing, leak repair, then remediation" },
-    });
-    const out = await price(mold, hard, forTrade("mold"));
-    expect(out.every((x) => x.adjustPct >= 0), `negative adjustment: ${out.map((x) => x.adjustPct).join(", ")}`);
-    expect(out.some((x) => x.adjustPct >= 5), `no pro priced up: ${out.map((x) => x.adjustPct).join(", ")}`);
-    return out.map((x) => x.adjustPct).join(", ");
+  // ---------- 4. Pricing chat ----------
+  console.log("\n4. Pricing chat");
+  await check("pricing", "reads the pro's rates from plain words, asks in plain words", async () => {
+    // pricingTurn doesn't save: nothing here touches the database.
+    const pro: Provider = { ...byName("Clearwater Plumbing"), pricing: null };
+    const state = pricingState(pro);
+    const messages = [...state.messages, { who: "pro" as const, text: "CA$120 call-out with the first hour, then CA$90 an hour. Parts at cost plus 15%. Up to CA$600 without asking me." }];
+    const out = await pricingTurn(pro, state, messages);
+    show("reply", out.reply);
+    show("draft", out.draft);
+    show("asks", out.asks);
+    expect(out.draft.callOut === 120 && out.draft.hourly === 90 && out.draft.partsMarkupPct === 15 && out.draft.approveOver === 600, `draft ${JSON.stringify(out.draft)}`);
+    expect(out.asks.length >= 3 && !out.asks.some((a) => JARGON.test(a)), `asks use trade terms: ${out.asks.join(" | ")}`);
+    return JSON.stringify(out.draft);
   });
 
   // ---------- 5. Profile interview ----------
@@ -331,6 +318,44 @@ async function main() {
       turns.push({ ...q, answer: q.multi ? q.options.slice(0, 2) : q.options.slice(0, 1), note: i === 0 ? "Mostly small bathroom jobs and sink leaks. I don't do basements." : null });
     }
     throw new Error(`no finish after ${PROFILE_MAX_QUESTIONS} questions`);
+  });
+
+  // ---------- Follow-up questions ----------
+
+  await check("questions", "doesn't re-ask what the homeowner already said", async () => {
+    const qs = await writeQuestions({
+      template: sink,
+      description: "There's a constant drip under my kitchen sink. I already turned the water off at the valve.",
+      observations: [{ shotId: "under_sink_wide", observation: "Cabinet under a kitchen sink; wet cabinet floor below the drain trap." }],
+      skippedShots: [],
+      mark: null,
+    });
+    show("questions", qs.map((q) => `${q.id}: ${q.q} [${q.options.join(" | ")}]${q.optional ? " (optional)" : ""}`));
+    expect(qs.length <= 5, `${qs.length} questions`);
+    expect(!qs.some((q) => q.id === "leak_rate" || q.id === "water_off"), "re-asked leak rate or water shut-off");
+    expect(qs.every((q) => q.options.length >= 2 && !/\$|price|cost/i.test(q.q)), "bad options or asked about price");
+    expect(!qs.some((q) => JARGON.test([q.q, ...q.options].join(" "))), "used trade terms the homeowner may not know");
+    return `${qs.length} questions`;
+  });
+
+  await check("questions", "plain words for an electrical problem", async () => {
+    const qs = await writeQuestions({
+      template: getTemplate("electrical"),
+      description: "Half the outlets in the kitchen stopped working this morning.",
+      observations: [{ shotId: "fixture_closeup", observation: "A standard wall outlet beside the kitchen counter, no scorch marks visible." }],
+      skippedShots: ["panel"],
+      mark: null,
+    });
+    show("questions", qs.map((q) => `${q.id}: ${q.q} [${q.options.join(" | ")}]`));
+    expect(!qs.some((q) => JARGON.test([q.q, ...q.options].join(" "))), "used trade terms the homeowner may not know");
+    return `${qs.length} questions`;
+  });
+
+  await check("questions", "template shots and questions use plain words", async () => {
+    const all = ["mold", "plumbing_sink", "electrical", "handyman", "roofing", "painting", "garden", "appliances"].map(getTemplate);
+    const bad = all.flatMap((t) => [...t.required_shots.map((x) => `${t.trade}: ${x.prompt} ${x.skip_label ?? ""}`), ...t.questions.map((q) => `${t.trade}: ${q.q} ${q.options.join(" ")}`)]).filter((x) => JARGON.test(x));
+    expect(!bad.length, `trade terms in templates: ${bad.join(" | ")}`);
+    return "ok";
   });
 
   // ---------- Summary ----------

@@ -1,8 +1,8 @@
 import "server-only";
-import { eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { db, schema } from "@/db";
 import type { Provider } from "@/db/schema";
-import { FIT_MIN, suggestedQuote, suggestionFor, type PriceSuggestion, type ProviderFit, type ProviderMatch, type Slot } from "@/shared/scope";
+import { DEFAULT_HOURS, FIT_MIN, quote, type JobEstimate, type ProviderFit, type ProviderMatch, type Slot } from "@/shared/scope";
 
 /** Great-circle distance in km. */
 export function distanceKm(a: { lat: number; lng: number }, b: { lat: number; lng: number }) {
@@ -22,7 +22,7 @@ export const etaMinutes = (km: number) => Math.round(10 + km * 2);
  * the soonest round hour at least 2 hours out if it falls in business hours
  * (8:00-17:00), then the next standard slots at 9:00, 13:00 and 16:00.
  */
-export function slotsFor(now = new Date()): Slot[] {
+export function genericSlots(now = new Date()): Slot[] {
   const earliest = now.getTime() + 2 * 3600 * 1000;
   const at = (dayOffset: number, hour: number) => {
     const d = new Date(now);
@@ -41,7 +41,73 @@ export function slotsFor(now = new Date()): Slot[] {
   return list.map((d, i) => ({ id: `s${i + 1}`, startsAt: d.toISOString() }));
 }
 
-type PricedSpec = { severity: number; areaM2: number; priceSuggestions?: PriceSuggestion[] | null };
+// ---------- One pro's free times (working hours minus booked jobs) ----------
+
+const HALF_HOUR = 30 * 60 * 1000;
+/** A visit blocks at least this long in the pro's calendar. */
+const MIN_BLOCK_HOURS = 2;
+const blockHours = (hours: number | null | undefined) => Math.max(MIN_BLOCK_HOURS, Math.ceil(hours ?? 0));
+/** WeekHours is Monday first; Date.getDay() is Sunday first. */
+const dayIndex = (d: Date) => (d.getDay() + 6) % 7;
+
+/** This pro's booked visits as [start, end) times, each as long as its estimated hours (2 h at least). */
+export function busyTimes(providerId: number): [number, number][] {
+  return db
+    .select({ slot: schema.scopeJobs.slot, hours: schema.jobSpecs.hours })
+    .from(schema.scopeJobs)
+    .leftJoin(schema.jobSpecs, eq(schema.jobSpecs.id, schema.scopeJobs.specId))
+    .where(and(eq(schema.scopeJobs.providerId, providerId), inArray(schema.scopeJobs.status, ["accepted", "en_route"])))
+    .all()
+    .filter((r) => r.slot)
+    .map((r) => [r.slot!.getTime(), r.slot!.getTime() + blockHours(r.hours) * 3600_000]);
+}
+
+/** Is [start, start + hours) inside the pro's working hours and clear of their bookings? */
+function fits(p: Pick<Provider, "hours">, busy: [number, number][], start: Date, hours: number) {
+  const week = p.hours ?? DEFAULT_HOURS;
+  for (let t = start.getTime(); t < start.getTime() + hours * 3600_000; t += HALF_HOUR) {
+    const d = new Date(t);
+    if (!week[dayIndex(d)]?.[d.getHours() * 2 + (d.getMinutes() >= 30 ? 1 : 0)]) return false;
+  }
+  const end = start.getTime() + hours * 3600_000;
+  return !busy.some(([a, b]) => start.getTime() < b && end > a);
+}
+
+/**
+ * Up to three times this pro can come, inside their working hours and between their bookings:
+ * on the hour, at least 2 hours from now, within a week, and at least 3 hours apart so they're real choices.
+ */
+export function slotsFor(p?: Pick<Provider, "id" | "hours">, job?: { hours?: number | null }, now = new Date()): Slot[] {
+  if (!p) return genericSlots(now);
+  const busy = busyTimes(p.id);
+  const need = blockHours(job?.hours);
+  const t = new Date(Math.ceil((now.getTime() + 2 * 3600_000) / 3600_000) * 3600_000);
+  const out: Date[] = [];
+  for (let i = 0; i < 7 * 24 && out.length < 3; i++, t.setHours(t.getHours() + 1)) {
+    if (out.length && t.getTime() - out.at(-1)!.getTime() < 3 * 3600_000) continue;
+    if (fits(p, busy, t, need)) out.push(new Date(t));
+  }
+  return out.map((d, i) => ({ id: `s${i + 1}`, startsAt: d.toISOString() }));
+}
+
+/**
+ * When the pricing agent books for this pro: the homeowner's requested time if the pro is free then,
+ * else the pro's first free half-hour after it (e.g. after their lunch break), else their soonest slot.
+ */
+export function slotNear(p: Pick<Provider, "id" | "hours">, job: { hours?: number | null }, wanted: Date | null, now = new Date()): Date | null {
+  const earliest = now.getTime() + 2 * 3600_000;
+  if (wanted && wanted.getTime() >= earliest) {
+    const busy = busyTimes(p.id);
+    const need = blockHours(job.hours);
+    for (let t = wanted.getTime(); t < wanted.getTime() + 7 * 24 * 3600_000; t += HALF_HOUR) {
+      if (fits(p, busy, new Date(t), need)) return new Date(t);
+    }
+  }
+  const first = slotsFor(p, job, now)[0];
+  return first ? new Date(first.startsAt) : null;
+}
+
+type PricedSpec = JobEstimate & { areaM2: number };
 
 export function toMatch(p: Provider, home: { lat: number; lng: number }, spec: PricedSpec, fitReason: string | null = null): ProviderMatch {
   const km = distanceKm(home, p);
@@ -53,8 +119,8 @@ export function toMatch(p: Provider, home: { lat: number; lng: number }, spec: P
     ratingCount: p.ratingCount,
     distanceKm: Math.round(km * 10) / 10,
     etaMinutes: etaMinutes(km),
-    quote: suggestedQuote(p.rateCard, spec, suggestionFor(spec, p.id)?.adjustPct),
-    slots: slotsFor(),
+    quote: quote(p.rateCard, spec),
+    slots: slotsFor(p, spec),
   };
 }
 

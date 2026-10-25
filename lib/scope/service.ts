@@ -5,13 +5,15 @@ import type { Home, JobSpec, Offer, Provider, Scan, ScanPhoto, ScopeJob, User } 
 import { HttpError } from "@/lib/auth";
 import {
   FREE_ANSWER_MAX,
-  HANDOFF_CONFIDENCE,
+  needsApproval,
+  quote,
   type HomeInfo,
   type PhotoMark,
   type HomeRecordItem,
   type JobSpecInfo,
   type MoreInfoRequest,
   type OfferInfo,
+  type Question,
   type ScanPhotoInfo,
   type ScanResponse,
   type ScopeJobInfo,
@@ -19,10 +21,11 @@ import {
   type ShotResult,
   type Template,
 } from "@/shared/scope";
-import { checkShot, generateSpec } from "./ai";
+import { checkShot, generateSpec, writeQuestions } from "./ai";
 import { rankFit } from "./fit";
-import { suggestPrices } from "./pricing";
-import { distanceKm, etaMinutes, matchProviders, providersInRange, virtualPartner } from "./matching";
+import { estimatePrice } from "./estimate";
+import { distanceKm, etaMinutes, matchProviders, providersInRange, slotNear, virtualPartner } from "./matching";
+import { pricingLive } from "./pricing-chat";
 import { checkImage, readScanPhoto, signedPhotoUrl, writeScanPhoto, type ImageType } from "./photos";
 import { getTemplate } from "./templates";
 
@@ -108,9 +111,13 @@ export function specInfo(s: JobSpec): JobSpecInfo {
     severity: s.severity,
     areaM2: s.areaM2,
     confidence: s.confidence,
+    hours: s.hours ?? null,
+    complexity: s.complexity ?? null,
+    partsCost: s.partsCost ?? null,
     fields: s.fields,
     priceLow: s.priceLow,
     priceHigh: s.priceHigh,
+    priceBasis: s.priceBasis ?? null,
     createdAt: s.createdAt.toISOString(),
   };
 }
@@ -151,6 +158,7 @@ export function offerInfo(o: Offer, p: Provider, home: Pick<Home, "lat" | "lng">
     price: o.price,
     slot: o.slot.toISOString(),
     status: o.status,
+    byAgent: o.byAgent ?? false,
     createdAt: o.createdAt.toISOString(),
     updatedAt: o.updatedAt.toISOString(),
   };
@@ -190,6 +198,7 @@ export function scanInfo(scan: Scan): ScanResponse["scan"] {
     description: scan.description ?? null,
     mark: scan.mark ?? null,
     focus: scan.focus ?? null,
+    questions: scan.questions ?? null,
     createdAt: scan.createdAt.toISOString(),
   };
 }
@@ -354,12 +363,64 @@ export function skipShot(scan: Scan, shotId: string): ShotResult {
 
 // ---------- Questions → JobSpec ----------
 
+/**
+ * The template with this scan's agent-written questions first, then the template's own (same id = same
+ * question). Every agent and view that reads answers by question id gets the right wording from it.
+ */
+export function scanTemplate(template: Template, scan: Pick<Scan, "questions">): Template {
+  if (!scan.questions?.length) return template;
+  const ids = new Set(scan.questions.map((q) => q.id));
+  return { ...template, questions: [...scan.questions, ...template.questions.filter((q) => !ids.has(q.id))] };
+}
+
+/** What the homeowner is asked right now: the questions a pro picked, else the agent's (or the template's until written). */
+function askedQuestions(scan: Scan, template: Template): Question[] {
+  // A question the pro asked for must be answered, even if the questions agent first wrote it as optional.
+  if (scan.focus) return scanTemplate(template, scan).questions.filter((q) => scan.focus!.questionIds.includes(q.id)).map((q) => ({ ...q, optional: false }));
+  return scan.questions ?? template.questions;
+}
+
+// One questions-agent call per scan at a time; a second request waits for the same answer.
+const writingQuestions = new Map<number, Promise<Question[]>>();
+
+/**
+ * The scan's follow-up questions. The first time the scan reaches its questions, the questions agent
+ * writes them from what the homeowner said and what the photos showed; they're stored so the
+ * homeowner, finishScan and the pro all see the same list.
+ */
+export async function ensureQuestions(scan: Scan, home: Home): Promise<Question[]> {
+  const template = getTemplate(scan.trade);
+  if (scan.focus || scan.questions || scan.status !== "clarifying") return askedQuestions(scan, template);
+  const running = writingQuestions.get(scan.id);
+  if (running) return running;
+  const work = (async () => {
+    const rows = bestPhotos(template, scanPhotoRows(scan.id));
+    const questions = await writeQuestions({
+      template,
+      description: scan.description ?? null,
+      observations: rows.map((p) => ({ shotId: p.shotId, observation: p.observation })),
+      skippedShots: scan.skippedShots,
+      mark: scan.mark ?? null,
+      // What the nearby pros told their pricing agent to ask, so their quotes have what they need.
+      proAsks: [...new Set(providersInRange(scan.trade, home).filter(pricingLive).flatMap((p) => p.pricing?.asks ?? []))].slice(0, 12),
+    });
+    touch(scan.id, { questions });
+    return questions;
+  })();
+  writingQuestions.set(scan.id, work);
+  try {
+    return await work;
+  } finally {
+    writingQuestions.delete(scan.id);
+  }
+}
+
 const generating = new Set<number>();
 
 export async function finishScan(scan: Scan, home: Home, input: { answers: Record<string, string>; notes?: string | null }) {
   if (scan.status !== "clarifying") throw new HttpError(409, "This scan isn't waiting for answers.");
-  const template = getTemplate(scan.trade);
-  const asked = scan.focus ? template.questions.filter((q) => scan.focus!.questionIds.includes(q.id)) : template.questions;
+  const template = scanTemplate(getTemplate(scan.trade), scan);
+  const asked = askedQuestions(scan, getTemplate(scan.trade));
 
   const answers = { ...scan.answers };
   for (const q of asked) {
@@ -395,10 +456,11 @@ export async function finishScan(scan: Scan, home: Home, input: { answers: Recor
       proRequest: job?.request?.message ?? null,
     });
 
-    // Two agents over the same in-range pros, in parallel:
-    // matching ranks them by how their description fits this problem; pricing nudges each one's rate-card price.
+    // Each pro's price is their rates × the spec's estimated hours and parts (code, no agent).
+    // The matching agent ranks the in-range pros by how their profile fits this problem.
+    // With nobody in range, the estimate agent gives the homeowner a best-guess price for their area instead.
     const inRange = providersInRange(scan.trade, home, job?.declinedBy ?? []);
-    const [fit, priceSuggestions] = await Promise.all([
+    const [fit, estimate] = await Promise.all([
       rankFit({
         template,
         spec: generated,
@@ -409,13 +471,15 @@ export async function finishScan(scan: Scan, home: Home, input: { answers: Recor
           return { provider: p, distanceKm: Math.round(km * 10) / 10, etaMinutes: etaMinutes(km) };
         }),
       }),
-      suggestPrices({ template, spec: generated, answers, notes, providers: inRange }),
+      inRange.length ? null : estimatePrice({ template, spec: generated, answers, notes, home }),
     ]);
-    const matches = matchProviders(scan.trade, home, { ...generated, fit, priceSuggestions }, job?.declinedBy ?? []);
+    const matches = matchProviders(scan.trade, home, { ...generated, fit }, job?.declinedBy ?? []);
     const top = matches[0];
+    // Always a price for the homeowner: the top pro's, or the best guess.
+    const price = top ? { low: top.quote.low, high: top.quote.high, basis: null } : (estimate ?? (await estimatePrice({ template, spec: generated, answers, notes, home })));
     const prev = latestSpec(scan.id);
 
-    return db.transaction((tx) => {
+    const saved = db.transaction((tx) => {
       const spec = tx
         .insert(jobSpecs)
         .values({
@@ -428,11 +492,14 @@ export async function finishScan(scan: Scan, home: Home, input: { answers: Recor
           severity: generated.severity,
           areaM2: generated.areaM2,
           confidence: generated.confidence,
-          priceLow: top?.quote.low ?? null,
-          priceHigh: top?.quote.high ?? null,
+          hours: generated.hours,
+          complexity: generated.complexity,
+          partsCost: generated.partsCost,
+          priceLow: price.low,
+          priceHigh: price.high,
+          priceBasis: price.basis,
           pricedForProviderId: top?.id ?? null,
           fit,
-          priceSuggestions,
         })
         .returning()
         .get();
@@ -448,17 +515,16 @@ export async function finishScan(scan: Scan, home: Home, input: { answers: Recor
         // Answering a pro's "ask for more": back to their New tab with the updated spec.
         tx.update(scopeJobs).set({ specId: spec.id, status: "pending", request: null, updatedAt: now }).where(eq(scopeJobs.id, job.id)).run();
         tx.update(scans).set({ status: "submitted", focus: null, focusDone: [], updatedAt: now }).where(eq(scans.id, scan.id)).run();
-      } else if (spec.confidence < HANDOFF_CONFIDENCE) {
-        // Low confidence: a human reviews it, with the spec attached.
-        tx.insert(scopeJobs)
-          .values({ scanId: scan.id, specId: spec.id, status: "handoff", providerId: top?.id ?? virtualPartner(scan.trade)?.id ?? null })
-          .run();
-        tx.update(scans).set({ status: "submitted", updatedAt: now }).where(eq(scans.id, scan.id)).run();
       } else {
+        // Always priced, however unsure the agent is: low confidence only flags the spec for pros.
+        // The homeowner can still ask for a person (askForHuman).
         tx.update(scans).set({ status: "spec_ready", updatedAt: now }).where(eq(scans.id, scan.id)).run();
       }
       return spec;
     });
+    // A reopened request: the pricing agents re-send their offers against the new spec.
+    if (job && isBroadcast(job)) sendAgentOffers(job.id);
+    return saved;
   } finally {
     generating.delete(scan.id);
   }
@@ -490,6 +556,40 @@ export function moveJob(job: ScopeJob, from: ScopeJobStatus[], set: Partial<Scop
 }
 
 /** "Get offers": sends the spec to every matching pro at once. Each can send a price and time. */
+/**
+ * The pricing agents' offers: every invited pro with approved pricing whose quote is within their limit
+ * gets an offer sent for them, at that price, in their first free time (the homeowner's preferred
+ * time when it fits). Pros over their limit, or without approved pricing, review the request themselves.
+ */
+export function sendAgentOffers(jobId: number) {
+  const job = db.select().from(scopeJobs).where(eq(scopeJobs.id, jobId)).get();
+  if (!job || job.status !== "open" || !job.specId) return 0;
+  const spec = db.select().from(jobSpecs).where(eq(jobSpecs.id, job.specId)).get();
+  const scan = db.select().from(scans).where(eq(scans.id, job.scanId)).get();
+  const home = scan && db.select().from(homes).where(eq(homes.id, scan.homeId)).get();
+  if (!spec || !scan || !home) return 0;
+  const invited = job.invited.length ? db.select().from(providers).where(inArray(providers.id, job.invited)).all() : [];
+  const now = new Date();
+  let sent = 0;
+  for (const p of invited) {
+    if (!pricingLive(p) || job.declinedBy.includes(p.id)) continue;
+    const q = quote(p.rateCard, spec);
+    if (needsApproval(p.rateCard, q)) continue;
+    const at = slotNear(p, spec, job.requestedSlot ?? null, now);
+    if (!at) continue;
+    // Never overwrite an offer the pro sent by hand.
+    const mine = db.select().from(offers).where(and(eq(offers.jobId, job.id), eq(offers.providerId, p.id))).get();
+    if (mine && !mine.byAgent && mine.status === "active") continue;
+    db.insert(offers)
+      .values({ jobId: job.id, providerId: p.id, price: q.price, slot: at, status: "active", byAgent: true })
+      .onConflictDoUpdate({ target: [offers.jobId, offers.providerId], set: { price: q.price, slot: at, status: "active", byAgent: true, updatedAt: now } })
+      .run();
+    sent++;
+  }
+  if (sent) db.update(scopeJobs).set({ updatedAt: now }).where(eq(scopeJobs.id, job.id)).run();
+  return sent;
+}
+
 export function requestOffers(scan: Scan, home: Home, slot?: string) {
   const requestedSlot = slot ? parseSlot(slot) : null;
   const spec = latestSpec(scan.id);
@@ -500,9 +600,9 @@ export function requestOffers(scan: Scan, home: Home, slot?: string) {
   if (!matches.length) throw new HttpError(409, "No pros cover this job right now. Try a virtual call.");
   const set = { status: "open" as const, providerId: null, specId: spec.id, mode: "onsite" as const, requestedSlot, invited: matches.map((m) => m.id) };
 
-  if (job) moveJob(job, ["declined"], set);
-  else db.insert(scopeJobs).values({ scanId: scan.id, ...set }).run();
+  const id = job ? moveJob(job, ["declined"], set).id : db.insert(scopeJobs).values({ scanId: scan.id, ...set }).returning().get().id;
   touch(scan.id, { status: "submitted" });
+  sendAgentOffers(id);
 }
 
 /** The homeowner picks one offer: that pro gets the job and every other offer closes. */

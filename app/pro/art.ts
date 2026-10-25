@@ -4,7 +4,7 @@ const FILES: Record<string, string> = {
   mold: "mold",
   electrical: "electrical",
   handyman: "handyman",
-  locksmith: "locksmith",
+  roofing: "roofing",
   painting: "painting",
   garden: "garden",
   appliances: "appliances",
