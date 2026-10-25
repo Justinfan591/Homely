@@ -4,7 +4,7 @@ import { KeyboardAvoidingView, Linking, Platform, Pressable, StyleSheet, View } 
 import { useSWRConfig } from "swr";
 import { Button } from "@/components/Button";
 import { Chip } from "@/components/Controls";
-import { Field } from "@/components/Design";
+import { AddressField } from "@/components/AddressField";
 import { Icon } from "@/components/Icon";
 import { Screen, Title } from "@/components/Screen";
 import { Text } from "@/components/Text";
@@ -22,6 +22,8 @@ export default function SetupHome() {
   const { data: profile } = useProfile();
   const { mutate } = useSWRConfig();
   const [address, setAddress] = useState<string | null>(null);
+  // Where the address is, when it came from a suggestion or the phone's location (else the server looks it up).
+  const [at, setAt] = useState<{ lat: number; lng: number } | null>(null);
   const [type, setType] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -30,15 +32,21 @@ export default function SetupHome() {
   const [locating, setLocating] = useState(false);
   const [locateNote, setLocateNote] = useState<{ text: string; settings?: boolean } | null>(null);
   const asked = useRef(false);
+  /** What's in the field right now, for the location lookup that finishes later. */
+  const typed = useRef("");
 
-  async function locate() {
+  /** `manual`: they tapped "Use my current location", so replace what's there. The automatic ask only fills an empty field. */
+  async function locate(manual = false) {
     setLocating(true);
     setLocateNote(null);
     const r = await currentAddress();
     setLocating(false);
     if ("address" in r) {
-      // Only fill an empty field: never overwrite what they've typed meanwhile.
-      setAddress((typed) => (typed?.trim() ? typed : r.address));
+      if (manual || !typed.current.trim()) {
+        typed.current = r.address;
+        setAddress(r.address);
+        setAt({ lat: r.lat, lng: r.lng });
+      }
     } else if (r.error === "blocked") {
       setLocateNote({ text: "Location is off for Scope. Turn it on in Settings, or type your address.", settings: true });
     } else {
@@ -57,7 +65,7 @@ export default function SetupHome() {
     setBusy(true);
     setError(null);
     try {
-      await mutate("profile", api.updateProfile({ address: where.trim(), homeType: kind }), { revalidate: false });
+      await mutate("profile", api.updateProfile({ address: where.trim(), homeType: kind, ...(at ?? {}) }), { revalidate: false });
       await mutate("homes");
       router.replace("/");
     } catch (e) {
@@ -83,19 +91,25 @@ export default function SetupHome() {
         <View style={{ marginTop: 36 }}>
           <Title title="Tell us about your home" sub="So pros come prepared." />
         </View>
-        <Field
+        <AddressField
           label="Where"
-          icon="map-pin"
           value={where}
-          onChangeText={setAddress}
+          onChangeText={(t) => {
+            typed.current = t;
+            setAddress(t);
+            setAt(null);
+          }}
+          onPick={(s) => {
+            typed.current = s.address;
+            setAddress(s.address);
+            setAt({ lat: s.lat, lng: s.lng });
+          }}
           placeholder={locating ? "Finding your address…" : "Street address, city"}
-          autoComplete="street-address"
-          textContentType="fullStreetAddress"
           style={{ marginTop: 36 }}
         />
         <Pressable
           accessibilityRole="button"
-          onPress={() => (locateNote?.settings ? Linking.openSettings() : void locate())}
+          onPress={() => (locateNote?.settings ? Linking.openSettings() : void locate(true))}
           disabled={locating}
           hitSlop={8}
           style={({ pressed }) => [styles.locate, (pressed || locating) && { opacity: 0.5 }]}

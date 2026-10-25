@@ -279,6 +279,8 @@ export function createHttpApi(opts: HttpApiOptions): ScopeApi {
 
     reverseGeocode: (lat, lng) => run(async () => (await h.reverseGeocode(lat, lng)).address),
 
+    searchAddresses: (query) => run(async () => (query.trim().length < 3 ? [] : (await h.searchAddresses(query)).suggestions)),
+
     listHomes: () =>
       run(async () => {
         const { home } = await h.home();

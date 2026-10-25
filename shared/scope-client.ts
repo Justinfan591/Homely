@@ -9,6 +9,7 @@
 //
 // Errors throw ScopeApiError with the server's message (safe to show to users) and HTTP status.
 import type {
+  AddressSuggestion,
   ClassifyResult,
   CodeLoginResponse,
   HomeInfo,
@@ -135,8 +136,8 @@ export function createScopeClient(options: ScopeClientOptions = {}) {
       setHome: (home: { address: string; lat: number; lng: number; label?: string }) => call<{ home: HomeInfo }>("/api/home", { method: "PUT", body: home }),
       /** Name, age, address and home type. */
       profile: () => call<ProfileInfo>("/api/profile"),
-      /** Only the fields sent change. A new address is geocoded on the server. */
-      updateProfile: (data: { name?: string; age?: number | null; address?: string; homeType?: string | null }) =>
+      /** Only the fields sent change. A new address is geocoded on the server, unless `lat`/`lng` say where it is. */
+      updateProfile: (data: { name?: string; age?: number | null; address?: string; homeType?: string | null; lat?: number; lng?: number }) =>
         call<ProfileInfo>("/api/profile", { method: "PUT", body: data }),
       /** "Tell us what's wrong": a voice recording → its text. */
       transcribe: (audio: PhotoInput, filename = "recording.m4a") => {
@@ -146,6 +147,8 @@ export function createScopeClient(options: ScopeClientOptions = {}) {
       },
       /** Current position → a street address ("12 Main St, Toronto"), or null if it can't be found. */
       reverseGeocode: (lat: number, lng: number) => call<{ address: string | null }>(`/api/geocode/reverse?lat=${lat}&lng=${lng}`),
+      /** Address type-ahead: up to 5 suggestions for what they've typed (3+ characters). */
+      searchAddresses: (q: string) => call<{ suggestions: AddressSuggestion[] }>(`/api/geocode/search?q=${encodeURIComponent(q)}`),
       /** Which trade the description (and optional screening photo) is about. Nothing is stored. */
       classify: (text: string, photo?: PhotoInput | null) => {
         const form = new FormData();

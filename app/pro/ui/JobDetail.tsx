@@ -1,7 +1,7 @@
 import type { Provider } from "@/db/schema";
 import { timeAgo } from "@/shared/format";
 import { Estimate } from "./Estimate";
-import { ESTIMATE_LABEL, JOB_STATUS_LABELS, SEVERITY_LABELS, priceRange, cad, type ProJobDetail, type ProTab } from "@/shared/scope";
+import { ESTIMATE_LABEL, JOB_STATUS_LABELS, SEVERITY_LABELS, priceRange, cad, type ProJobDetail } from "@/shared/scope";
 import { tradeArt } from "../art";
 import { CalendarLink } from "./Calendar";
 import { confidenceTone, Severity, Stars } from "./JobCard";

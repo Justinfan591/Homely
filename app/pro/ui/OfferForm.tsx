@@ -1,5 +1,5 @@
 import type { Provider } from "@/db/schema";
-import { slotLabel, cad, type ProJobDetail, type ProTab } from "@/shared/scope";
+import { slotLabel, cad, type ProJobDetail } from "@/shared/scope";
 import { accept, askMore, decline, offer, virtualCall, withdraw } from "../actions";
 
 /**

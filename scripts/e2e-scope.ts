@@ -48,6 +48,14 @@ function aiCheck(cond: unknown, what: string) {
     console.log(`    ! warning (real AI): ${what}`);
   }
 }
+/** For checks that need an outside service (Photon address search): warn when it's unreachable. */
+function netCheck(cond: unknown, what: string) {
+  checks++;
+  if (!cond) {
+    warnings++;
+    console.log(`    ! warning (outside service): ${what}`);
+  }
+}
 async function rejects(p: Promise<unknown>, status: number, what: string) {
   try {
     await p;
@@ -213,6 +221,28 @@ async function main() {
       const { templates } = await api.homeowner.templates();
       check(["mold", "plumbing_sink"].every((t) => templates.some((x) => x.trade === t)), "mold and plumbing_sink templates ship");
       await rejects(api.homeowner.startScan("chimney_sweep"), 404, "unknown trade");
+    });
+
+    await flow("Address type-ahead; a picked suggestion's coordinates are saved as-is", async () => {
+      check((await api.homeowner.searchAddresses("10")).suggestions.length === 0, "no search under 3 characters");
+      const { suggestions } = await api.homeowner.searchAddresses("1000 rue Sherbrooke");
+      check(Array.isArray(suggestions) && suggestions.length <= 5, "at most 5 suggestions");
+      netCheck(suggestions.length > 0, "Photon finds 1000 rue Sherbrooke");
+      for (const x of suggestions) check(x.address && x.line1 && Number.isFinite(x.lat) && Number.isFinite(x.lng), `suggestion is complete: ${JSON.stringify(x)}`);
+      netCheck(suggestions.some((x) => /montr[eé]al/i.test(x.address)), `the Montreal one leads (near the home): ${suggestions.map((x) => x.address).join(" | ")}`);
+      check(new Set(suggestions.map((x) => x.address.toLowerCase())).size === suggestions.length, "no duplicate suggestions");
+
+      // Picked: saved where the suggestion is, not re-geocoded.
+      const pick = { address: "Somewhere Picked, Test City", lat: CENTER.lat + 0.01, lng: CENTER.lng - 0.01 };
+      await api.homeowner.updateProfile(pick);
+      let h = (await api.homeowner.home()).home!;
+      check(h.address === pick.address && h.lat === pick.lat && h.lng === pick.lng, "picked address keeps its coordinates");
+      // Same address, new coordinates (e.g. "Use my current location"): still updated. Back to the test centre.
+      await api.homeowner.updateProfile({ address: pick.address, ...CENTER });
+      h = (await api.homeowner.home()).home!;
+      check(h.lat === CENTER.lat && h.lng === CENTER.lng, "same address with new coordinates moves the home");
+      check((await raw("/api/geocode/search?q=main+street")).status === 401, "search needs a signed-in homeowner");
+      await api.homeowner.updateProfile({ address: "1 Test Street", ...CENTER });
     });
 
     await flow("Happy path: scan → retake → skip → questions → spec → request → offers → accept → en route → done → rate", async () => {

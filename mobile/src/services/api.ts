@@ -1,4 +1,5 @@
 import type {
+  AddressSuggestion,
   Classification,
   Home,
   Job,
@@ -56,6 +57,8 @@ export interface ScopeApi {
 
   /** Coordinates → a street address, for when the phone can't look it up itself (e.g. on web). */
   reverseGeocode(lat: number, lng: number): Promise<string | null>;
+  /** Address type-ahead: up to 5 suggestions for what they've typed (empty under 3 characters). */
+  searchAddresses(query: string): Promise<AddressSuggestion[]>;
 
   listHomes(): Promise<Home[]>;
   /** The Home Record: scans and jobs for one home, newest first. */

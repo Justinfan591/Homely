@@ -210,7 +210,11 @@ export type Profile = {
   homeType: string | null;
 };
 
-export type ProfileUpdate = { name?: string; age?: number | null; address?: string; homeType?: string | null };
+/** `lat`/`lng`: where a picked suggestion (or the phone's location) is, so the server needn't look it up. */
+export type ProfileUpdate = { name?: string; age?: number | null; address?: string; homeType?: string | null; lat?: number; lng?: number };
+
+/** One address type-ahead suggestion: "1000 Rue Sherbrooke Ouest" / "Montreal, Quebec". */
+export type AddressSuggestion = { address: string; line1: string; line2: string; lat: number; lng: number };
 
 /** "It sounds like Plumbing: A leak under the kitchen sink.", with two other guesses to offer. */
 export type Classification = {

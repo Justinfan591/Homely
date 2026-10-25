@@ -296,6 +296,9 @@ export type PhotoMark = { shotId: string; x: number; y: number };
 export const HOME_TYPES = ["Apartment", "House", "Condo", "Townhouse", "Other"] as const;
 
 /** GET/PUT /api/profile: the homeowner's own details and home. */
+/** One address type-ahead suggestion: "1000 Rue Sherbrooke Ouest" / "Montreal, Quebec", plus where it is. */
+export type AddressSuggestion = { address: string; line1: string; line2: string; lat: number; lng: number };
+
 export type ProfileInfo = {
   name: string;
   email: string | null;

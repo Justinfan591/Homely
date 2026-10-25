@@ -5,6 +5,7 @@ import { cad, JOB_STATUS_LABELS, type ProJobDetail } from "@/shared/scope";
 import { advance } from "../actions";
 import { proHref } from "../href";
 import { SubmitButton } from "../SubmitButton";
+import { CalendarLink } from "./Calendar";
 import { Estimate } from "./Estimate";
 import { Empty } from "./JobCard";
 
@@ -108,6 +109,7 @@ function BookingDetail({ p, d, show }: { p: Provider; d: ProJobDetail; show: str
               </SubmitButton>
             </form>
           )}
+          {job.status !== "done" && <CalendarLink d={d} providerName={p.name} />}
         </div>
       </div>
       {d.photos.length > 0 && (

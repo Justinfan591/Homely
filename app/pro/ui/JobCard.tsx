@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { timeAgo } from "@/shared/format";
-import { JOB_STATUS_LABELS, SEVERITY_LABELS, slotLabel, cad, type ProQueueCard, type ProTab } from "@/shared/scope";
+import { JOB_STATUS_LABELS, SEVERITY_LABELS, slotLabel, cad, type ProQueueCard } from "@/shared/scope";
 import { allArt, tradeArt } from "../art";
 import { proHref } from "../href";
 

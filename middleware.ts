@@ -2,8 +2,8 @@ import { NextResponse, type NextRequest } from "next/server";
 
 // CORS for /api/*, so a UI served from another origin (Vite, Expo web, a tunnel)
 // can call this server. Auth is a bearer token, never cookies, so any origin is fine.
-// Set CORS_ORIGINS="https://a.example,https://b.example" to restrict it.
-const allowed = (process.env.CORS_ORIGINS ?? "*").split(",").map((s) => s.trim()).filter(Boolean);
+// Set CORS_ORIGINS="https://a.example,https://b.example" to restrict it (empty or unset: any origin).
+const allowed = (process.env.CORS_ORIGINS || "*").split(",").map((s) => s.trim()).filter(Boolean);
 
 function corsHeaders(origin: string | null) {
   const allowOrigin = allowed.includes("*") ? "*" : origin && allowed.includes(origin) ? origin : "";

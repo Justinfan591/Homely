@@ -23,13 +23,13 @@ export default function Home() {
   const { home } = useHome();
   const profile = useProfile();
   const record = useRecord(home?.id);
+  const [refreshing, setRefreshing] = useState(false);
 
-  // Sign-up isn't finished until we have a name and a home.
+  // Sign-up isn't finished until we have a name and a home. (Every hook above this line.)
   if (profile.data && !profile.data.name.trim()) return <Redirect href="/setup/name" />;
   if (profile.data && !profile.data.address) return <Redirect href="/setup/home" />;
 
   const next = NEXT_ORDER.map((s) => record.data?.find((i) => i.status === s)).find(Boolean);
-  const [refreshing, setRefreshing] = useState(false);
 
   async function refresh() {
     setRefreshing(true);

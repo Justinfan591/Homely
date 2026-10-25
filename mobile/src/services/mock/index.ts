@@ -2,6 +2,7 @@ import { matchProviders } from "@/domain/matching";
 import { priceRange } from "@/domain/pricing";
 import { slotLabel } from "@/domain/format";
 import type {
+  AddressSuggestion,
   Classification,
   Job,
   JobSpec,
@@ -18,6 +19,15 @@ import type {
 import { getTemplate, templates } from "@/templates";
 import { ApiError, type ScopeApi } from "../api";
 import { homes, providers, seedJobs, seedScans, seedSpecs } from "./seed";
+
+/** A few Toronto addresses for the offline type-ahead. */
+const MOCK_ADDRESSES: AddressSuggestion[] = [
+  { address: "142 Lakeview Ave, Toronto", line1: "142 Lakeview Ave", line2: "Toronto, Ontario", lat: 43.6532, lng: -79.3832 },
+  { address: "100 Queen St W, Toronto", line1: "100 Queen St W", line2: "Toronto, Ontario", lat: 43.6525, lng: -79.3839 },
+  { address: "290 Bremner Blvd, Toronto", line1: "290 Bremner Blvd", line2: "Toronto, Ontario", lat: 43.6426, lng: -79.3871 },
+  { address: "55 Mill St, Toronto", line1: "55 Mill St", line2: "Toronto, Ontario", lat: 43.6503, lng: -79.3596 },
+  { address: "18 Pine Point Rd, Honey Harbour", line1: "18 Pine Point Rd", line2: "Honey Harbour, Ontario", lat: 44.8582, lng: -79.8211 },
+];
 
 /** Knobs for exercising states that a real backend would produce on its own. */
 export const mockConfig = {
@@ -269,10 +279,10 @@ export const mockApi: ScopeApi = {
 
   getProfile: () => call("getProfile", 150, () => ({ ...profile, address: profile.address ?? homes[0].address })),
 
-  updateProfile: (data) =>
+  updateProfile: ({ lat, lng, ...data }) =>
     call("updateProfile", 300, () => {
       Object.assign(profile, data);
-      if (data.address) homes[0] = { ...homes[0], address: data.address };
+      if (data.address) homes[0] = { ...homes[0], address: data.address, ...(lat !== undefined && lng !== undefined ? { lat, lng } : {}) };
       return { ...profile, address: profile.address ?? homes[0].address };
     }),
 
@@ -297,6 +307,13 @@ export const mockApi: ScopeApi = {
     }),
 
   reverseGeocode: () => call("reverseGeocode", 400, () => homes[0].address),
+
+  searchAddresses: (query) =>
+    call("searchAddresses", 200, () => {
+      const q = query.trim().toLowerCase();
+      if (q.length < 3) return [];
+      return MOCK_ADDRESSES.filter((a) => a.address.toLowerCase().includes(q) || q.split(" ").every((w) => a.address.toLowerCase().includes(w)));
+    }),
 
   listHomes: () => call("listHomes", 150, () => homes),
 

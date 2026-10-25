@@ -2,7 +2,7 @@ import * as Location from "expo-location";
 import { Platform } from "react-native";
 import { api } from "@/services";
 
-export type AddressResult = { address: string } | { error: "denied" | "blocked" | "unavailable" };
+export type AddressResult = { address: string; lat: number; lng: number } | { error: "denied" | "blocked" | "unavailable" };
 
 /** "12 Main St, Toronto" from the phone's own geocoder, or null if it has nothing useful. */
 function format(a: Location.LocationGeocodedAddress | undefined): string | null {
@@ -26,7 +26,7 @@ export async function currentAddress(): Promise<AddressResult> {
       address = format((await Location.reverseGeocodeAsync(coords).catch(() => []))[0]);
     }
     address ??= await api.reverseGeocode(coords.latitude, coords.longitude).catch(() => null);
-    return address ? { address } : { error: "unavailable" };
+    return address ? { address, lat: coords.latitude, lng: coords.longitude } : { error: "unavailable" };
   } catch (e) {
     console.warn("Couldn't get the current location", e);
     return { error: "unavailable" };
