@@ -7,7 +7,7 @@ const ART: Record<string, number> = {
   mold: require("../../assets/trades/mold.png"),
   electrical: require("../../assets/trades/electrical.png"),
   handyman: require("../../assets/trades/handyman.png"),
-  locksmith: require("../../assets/trades/locksmith.png"),
+  roofing: require("../../assets/trades/roofing.png"),
   painting: require("../../assets/trades/painting.png"),
   garden: require("../../assets/trades/garden.png"),
   appliances: require("../../assets/trades/appliances.png"),
@@ -24,4 +24,4 @@ export const tradeArt = (trade: TradeId) => ART[trade] ?? ART.handyman;
 export const tradeCategory = (trade: TradeId, fallback: string) => CATEGORY[trade] ?? fallback;
 
 /** Every icon, in the order the floating clusters use them. */
-export const allArt = [ART.plumbing_sink, ART.handyman, ART.painting, ART.locksmith, ART.mold, ART.electrical, ART.garden, ART.appliances];
+export const allArt = [ART.plumbing_sink, ART.handyman, ART.painting, ART.roofing, ART.mold, ART.electrical, ART.garden, ART.appliances];

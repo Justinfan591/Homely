@@ -7,10 +7,10 @@
   "required_shots": [
     { "id": "fixture_closeup", "prompt": "Show the outlet, switch or light", "tip": "Fill the frame. Don't touch anything that's sparking or hot.", "hint": "The outlet, switch, fixture or appliance cord with the problem, close enough to see the plate and any marks." },
     { "id": "room_wide", "prompt": "Step back and show where it is", "tip": "Include the wall or ceiling around it.", "hint": "A wider view of the room showing where the fixture is." },
-    { "id": "panel", "prompt": "Show your breaker panel", "tip": "Open the door so the switches are in view.", "hint": "The electrical panel with breakers visible.", "optional": true, "skip_label": "I can't get to it" }
+    { "id": "panel", "prompt": "Show the box with the power switches", "tip": "Usually a grey metal box in the basement, garage or a closet. Open its door.", "hint": "The electrical panel with breakers visible.", "optional": true, "skip_label": "I can't get to it" }
   ],
   "questions": [
-    { "id": "symptom", "q": "What's happening?", "options": ["No power", "Flickering", "Breaker keeps tripping", "Sparks or burning smell"] },
+    { "id": "symptom", "q": "What's happening?", "options": ["No power", "Flickering", "Power keeps cutting out", "Sparks or burning smell"] },
     { "id": "scope", "q": "How much is affected?", "options": ["One outlet or light", "One room", "Several rooms"] },
     { "id": "since", "q": "When did it start?", "options": ["Today", "This week", "Longer"], "optional": true }
   ],

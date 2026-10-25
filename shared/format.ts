@@ -7,6 +7,6 @@ export function timeAgo(value: string | number | Date) {
 }
 
 export function money(range: { min: number; max: number }) {
-  const f = (n: number) => `$${Math.round(n).toLocaleString()}`;
+  const f = (n: number) => `CA$${Math.round(n).toLocaleString("en-CA")}`;
   return range.min === range.max ? f(range.min) : `${f(range.min)}–${f(range.max)}`;
 }

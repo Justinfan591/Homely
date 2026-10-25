@@ -6,7 +6,7 @@ import { Button } from "@/components/Button";
 import { Stars } from "@/components/Controls";
 import { haptic } from "@/components/haptics";
 import { Icon } from "@/components/Icon";
-import { goHome, Screen } from "@/components/Screen";
+import { goHome, RefreshProvider, Screen } from "@/components/Screen";
 import { ErrorState } from "@/components/States";
 import { Text } from "@/components/Text";
 import { money, moneyRange, shortDate } from "@/domain/format";
@@ -28,12 +28,14 @@ export default function Track() {
   }
   if (!job) return <Screen close onBack={() => goHome()}><View /></Screen>;
   const refresh = () => void mutate();
-  if (job.status === "collecting") return <Collecting job={job} onChange={refresh} />;
-  if (job.status === "handoff") return <InReview job={job} onChange={refresh} />;
-  if (job.status === "more_info") return <MoreInfo job={job} onChange={refresh} />;
-  if (job.status === "declined") return <Declined job={job} onChange={refresh} />;
-  if (job.status === "cancelled") return <Cancelled job={job} />;
-  return <Progress job={job} onRated={refresh} />;
+  const view =
+    job.status === "collecting" ? <Collecting job={job} onChange={refresh} />
+    : job.status === "handoff" ? <InReview job={job} onChange={refresh} />
+    : job.status === "more_info" ? <MoreInfo job={job} onChange={refresh} />
+    : job.status === "declined" ? <Declined job={job} onChange={refresh} />
+    : job.status === "cancelled" ? <Cancelled job={job} />
+    : <Progress job={job} onRated={refresh} />;
+  return <RefreshProvider onRefresh={() => mutate()}>{view}</RefreshProvider>;
 }
 
 /** "Cancel request", with a second tap to confirm (no native dialogs, so it works on web too). */

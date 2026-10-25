@@ -1,6 +1,6 @@
 import { sqliteTable, text, integer, real, unique } from "drizzle-orm/sqlite-core";
 import type { JobReport } from "@/shared/types";
-import type { MoreInfoRequest, PhotoMark, PriceSuggestion, ProProfile, ProviderFit, RateCard } from "../shared/scope";
+import type { Complexity, MoreInfoRequest, PhotoMark, ProProfile, ProviderFit, ProviderPricing, Question, RateCard, WeekHours } from "../shared/scope";
 import { JOB_STATUSES as SCOPE_JOB_STATUSES, OFFER_STATUSES, SCAN_STATUSES } from "../shared/scope";
 
 const now = () => new Date();
@@ -163,6 +163,10 @@ export const providers = sqliteTable("providers", {
   /** Google Calendar connection from /pro: OAuth refresh token and the calendar's id (an email). */
   googleRefreshToken: text("google_refresh_token"),
   googleCalendar: text("google_calendar"),
+  /** /pro → Pricing: the chat with the pricing agent, its draft rates and asks. Null until started. */
+  pricing: text("pricing", { mode: "json" }).$type<ProviderPricing>(),
+  /** /pro → Schedule: working hours. Null: DEFAULT_HOURS. */
+  hours: text("hours", { mode: "json" }).$type<WeekHours>(),
   active: integer("active", { mode: "boolean" }).notNull().default(true),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().$defaultFn(now),
 });
@@ -185,6 +189,8 @@ export const scans = sqliteTable("scans", {
   description: text("description"),
   /** Where the homeowner marked the problem on one photo, in % of its width and height. */
   mark: text("mark", { mode: "json" }).$type<PhotoMark>(),
+  /** Follow-up questions the questions agent wrote for this scan. Null until the scan reaches its questions. */
+  questions: text("questions", { mode: "json" }).$type<Question[]>(),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().$defaultFn(now),
   updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().$defaultFn(now),
 });
@@ -220,14 +226,20 @@ export const jobSpecs = sqliteTable("job_specs", {
   severity: integer("severity").notNull(),
   areaM2: real("area_m2").notNull(),
   confidence: real("confidence").notNull(),
-  /** Suggested range for the top-matched provider at generation time (rate card + pricing agent). */
+  /** Suggested range for the top-matched provider at generation time (their rates × the estimate). */
   priceLow: real("price_low"),
   priceHigh: real("price_high"),
   pricedForProviderId: integer("priced_for_provider_id").references(() => providers.id),
+  /** Set when no pro's rate card priced it: the best-guess estimate's one-line basis for the homeowner. */
+  priceBasis: text("price_basis"),
   /** The matching agent's ranking of in-range pros for this spec, best first. Null: default order. */
   fit: text("fit", { mode: "json" }).$type<ProviderFit[]>(),
-  /** The pricing agent's per-pro adjustment to the rate-card price for this spec. Null: plain formula. */
-  priceSuggestions: text("price_suggestions", { mode: "json" }).$type<PriceSuggestion[]>(),
+  /** Retired: the old pricing agent's per-pro adjustments. Kept so existing databases still load. */
+  priceSuggestions: text("price_suggestions", { mode: "json" }).$type<unknown>(),
+  /** The spec agent's estimate of the work: hours, complexity and parts at cost (CAD). Every pro's price comes from these. */
+  hours: real("hours"),
+  complexity: text("complexity", { enum: ["low", "medium", "high"] }).$type<Complexity>(),
+  partsCost: real("parts_cost"),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().$defaultFn(now),
 });
 
@@ -273,6 +285,8 @@ export const offers = sqliteTable(
     price: integer("price").notNull(),
     slot: integer("slot", { mode: "timestamp" }).notNull(),
     status: text("status", { enum: OFFER_STATUSES }).notNull().default("active"),
+    /** Sent by the pro's pricing agent (their approved rates, under their limit), not by hand. */
+    byAgent: integer("by_agent", { mode: "boolean" }).notNull().default(false),
     createdAt: integer("created_at", { mode: "timestamp" }).notNull().$defaultFn(now),
     updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().$defaultFn(now),
   },

@@ -1,41 +1,61 @@
 import Link from "next/link";
 import type { Provider } from "@/db/schema";
-import type { ProfileStatus, ProTab } from "@/shared/scope";
+import type { ProfileStatus } from "@/shared/scope";
 import { tradeArt } from "../art";
 import { proHref } from "../href";
-import { CalendarStatus } from "./Calendar";
 import { Icon } from "./Icons";
 
-export type View = ProTab | "profile";
+export type View = "requests" | "calendar" | "bookings" | "reviews" | "analytics" | "schedule" | "pricing" | "profile";
 
-export const NAV: { id: View; label: string; short: string; icon: string }[] = [
-  { id: "new", label: "Requests", short: "Requests", icon: "inbox" },
-  { id: "review", label: "Needs review", short: "Review", icon: "eye" },
-  { id: "active", label: "Schedule", short: "Schedule", icon: "calendar" },
-  { id: "done", label: "Done", short: "Done", icon: "check" },
-  { id: "profile", label: "Profile", short: "Profile", icon: "user" },
+type NavItem = { id: View; label: string; icon: string; phone?: boolean };
+
+/** The design's sidebar: Bookings (plus Requests, which needs the pro) and Setup (plus Profile, which matching reads). */
+export const NAV: { section: string; items: NavItem[] }[] = [
+  {
+    section: "Bookings",
+    items: [
+      { id: "requests", label: "Requests", icon: "inbox", phone: true },
+      { id: "calendar", label: "Calendar", icon: "calendar", phone: true },
+      { id: "bookings", label: "Bookings", icon: "list", phone: true },
+      { id: "reviews", label: "Reviews", icon: "star" },
+      { id: "analytics", label: "Analytics", icon: "chart" },
+    ],
+  },
+  {
+    section: "Setup",
+    items: [
+      { id: "schedule", label: "Schedule", icon: "clock" },
+      { id: "pricing", label: "Pricing", icon: "tag", phone: true },
+      { id: "profile", label: "Profile", icon: "user", phone: true },
+    ],
+  },
 ];
+export const ALL_VIEWS = NAV.flatMap((g) => g.items);
 
-/** Sidebar on wide screens; a top bar and the app's bottom icon bar on phones. */
+/** Sidebar on wide screens; a top bar and the app's bottom icon bar (the five most-used pages) on phones. */
 export function Shell({
   p,
   view,
-  counts,
+  requests,
   profile,
+  pricingLive,
   children,
 }: {
   p: Provider;
   view: View;
-  counts: Record<ProTab, number>;
+  /** Requests waiting on this pro. */
+  requests: number;
   profile: ProfileStatus;
+  pricingLive: boolean;
   children: React.ReactNode;
 }) {
-  const badge = (id: View) => (id === "profile" ? (profile === "complete" ? null : "!") : counts[id] || null);
+  const todo = (id: View) => (id === "profile" && profile !== "complete") || (id === "pricing" && !pricingLive);
+  const count = (id: View) => (id === "requests" ? requests : 0);
   return (
     <div className="shell">
       <aside className="side">
         <div className="brand">
-          Scope <span>Pro</span>
+          Homely <span>Pro</span>
         </div>
         <div className="me">
           <div className="me-top">
@@ -54,28 +74,26 @@ export function Shell({
             ))}
           </div>
         </div>
-        <nav className="nav">
-          {NAV.map((n) => (
-            <Link key={n.id} href={proHref(p.id, { tab: n.id })} className={view === n.id ? "on" : ""}>
-              <Icon name={n.icon} />
-              {n.label}
-              {n.id === "profile" ? (
-                profile !== "complete" && <span className="count todo">Finish setup</span>
-              ) : (
-                <span className="count">{counts[n.id]}</span>
-              )}
-            </Link>
-          ))}
-        </nav>
+        {NAV.map((g) => (
+          <nav key={g.section} className="nav" aria-label={g.section}>
+            <div className="nav-section">{g.section}</div>
+            {g.items.map((n) => (
+              <Link key={n.id} href={proHref(p.id, { tab: n.id })} className={view === n.id ? "on" : ""} aria-current={view === n.id ? "page" : undefined}>
+                <Icon name={n.icon} />
+                {n.label}
+                {todo(n.id) ? <span className="count todo">Set up</span> : count(n.id) ? <span className="count">{count(n.id)}</span> : null}
+              </Link>
+            ))}
+          </nav>
+        ))}
         <div className="side-foot">
-          <CalendarStatus p={p} />
           <span className="live">Live</span>
         </div>
       </aside>
 
       <header className="topbar">
         <div className="brand">
-          Scope <span>Pro</span>
+          Homely <span>Pro</span>
         </div>
         <span className="muted small">{p.name}</span>
       </header>
@@ -83,12 +101,12 @@ export function Shell({
       <main className="main">{children}</main>
 
       <nav className="tabbar" aria-label="Sections">
-        {NAV.map((n) => {
-          const b = badge(n.id);
+        {ALL_VIEWS.filter((n) => n.phone).map((n) => {
+          const b = todo(n.id) ? "!" : count(n.id) || null;
           return (
             <Link key={n.id} href={proHref(p.id, { tab: n.id })} className={view === n.id ? "on" : ""} aria-label={n.label}>
               <Icon name={n.icon} size={26} />
-              {n.short}
+              {n.label}
               {b ? <span className="dot">{b}</span> : null}
             </Link>
           );

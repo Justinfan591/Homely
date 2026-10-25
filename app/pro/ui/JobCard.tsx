@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { timeAgo } from "@/shared/format";
-import { JOB_STATUS_LABELS, SEVERITY_LABELS, slotLabel, usd, type ProQueueCard, type ProTab } from "@/shared/scope";
+import { JOB_STATUS_LABELS, SEVERITY_LABELS, slotLabel, cad, type ProQueueCard, type ProTab } from "@/shared/scope";
 import { allArt, tradeArt } from "../art";
 import { proHref } from "../href";
 
@@ -18,7 +18,7 @@ export function Severity({ value }: { value: number }) {
 export const confidenceTone = (c: number) => (c >= 0.8 ? "good" : c >= 0.6 ? "" : "bad");
 
 /** One job in a list. Only a link: no price or slot inputs here (the e2e test reads the first price input on the page). */
-export function JobCard({ card: c, providerId, tab, selected }: { card: ProQueueCard; providerId: number; tab: ProTab; selected: boolean }) {
+export function JobCard({ card: c, providerId, tab, selected }: { card: ProQueueCard; providerId: number; tab: string; selected: boolean }) {
   return (
     <Link href={proHref(providerId, { tab, job: c.jobId })} className={`card jcard ${selected ? "selected" : ""}`}>
       {/* eslint-disable-next-line @next/next/no-img-element -- small static icon */}
@@ -36,18 +36,19 @@ export function JobCard({ card: c, providerId, tab, selected }: { card: ProQueue
         </div>
       </div>
       <div className="price">
-        <strong>{usd(c.quote.price)}</strong>
+        <strong>{cad(c.quote.price)}</strong>
         <span className="muted small">suggested</span>
       </div>
       <div className="badges">
         {c.status === "open" && <span className="badge">Open for offers · {c.invitedCount} pros</span>}
         {c.status === "open" && <OfferBadge offer={c.myOffer} />}
+        {c.status === "open" && !c.myOffer && c.needsApproval && <span className="badge warn">Over your limit · your call</span>}
         {c.status === "more_info" && <span className="badge warn">Waiting for homeowner</span>}
         {c.status === "pending" && <span className="badge ink">Booked you · confirm the time</span>}
         {c.status === "handoff" && <span className="badge bad">Handoff</span>}
         {c.status === "virtual_call" && <span className="badge">Virtual call</span>}
         {c.confidence < 0.6 && c.status !== "handoff" && <span className="badge bad">Low confidence</span>}
-        {(tab === "active" || tab === "done") && <span className="badge">{JOB_STATUS_LABELS[c.status]}</span>}
+        {["accepted", "en_route", "done"].includes(c.status) && <span className="badge">{JOB_STATUS_LABELS[c.status]}</span>}
         {c.rating != null && <Stars value={c.rating} />}
       </div>
     </Link>
@@ -60,7 +61,7 @@ function OfferBadge({ offer: o }: { offer: ProQueueCard["myOffer"] }) {
   if (o.status === "stale") return <span className="badge warn">Spec updated · re-send offer</span>;
   return (
     <span className="badge good">
-      Your offer: {usd(o.price)} · {slotLabel(o.slot)}
+      {o.byAgent ? "Agent sent" : "Your offer"}: {cad(o.price)} · {slotLabel(o.slot)}
     </span>
   );
 }

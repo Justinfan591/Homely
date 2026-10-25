@@ -1,4 +1,4 @@
-// Scope: trade templates, pricing (rate card + bounded AI adjustment) and the API shapes shared by
+// Scope: trade templates, pricing (each pro's hourly rates × the agent's estimate) and the API shapes shared by
 // the server, the Expo app and the /pro dashboard. Safe to import anywhere.
 import { z } from "zod";
 
@@ -46,47 +46,113 @@ export type Template = z.infer<typeof templateSchema>;
 export type Shot = Template["required_shots"][number];
 export type Question = Template["questions"][number];
 
-// ---------- Pricing (rate card formula; the pricing agent may only nudge it by ±PRICE_ADJUST_MAX%) ----------
+// ---------- Pricing (each pro's rates × the spec agent's estimate of hours and parts) ----------
 
-export const rateCardSchema = z.object({
-  base: z.number().min(0).max(100000),
-  per_m2: z.number().min(0).max(100000),
-  severity_multiplier: z.array(z.number().min(0).max(20)).length(5),
+/**
+ * A pro's rates, in Canadian dollars. Set in /pro → Pricing by chatting with the pricing agent.
+ * callOut covers the visit and the first hour; each hour after costs `hourly`; parts are billed at
+ * cost plus `partsMarkupPct`. Quotes over `approveOver` go to the pro instead of being sent automatically.
+ */
+const rateCardShape = z.object({
+  callOut: z.number().min(0).max(100000),
+  hourly: z.number().min(0).max(100000),
+  partsMarkupPct: z.number().min(0).max(200),
+  approveOver: z.number().min(0).max(100000),
 });
-export type RateCard = z.infer<typeof rateCardSchema>;
+export type RateCard = z.infer<typeof rateCardShape>;
 
-export const PRICE_SPREAD = 0.15;
+export const DEFAULT_RATES: RateCard = { callOut: 120, hourly: 90, partsMarkupPct: 15, approveOver: 600 };
+
 const round5 = (n: number) => Math.round(n / 5) * 5;
 
-/** price = (base + per_m2 × area) × severity_multiplier[severity-1]; range = price ± 15%. */
-export function quote(card: RateCard, spec: { severity: number; areaM2: number }) {
-  const sev = Math.min(5, Math.max(1, Math.round(spec.severity)));
-  const area = Math.max(0, spec.areaM2);
-  const price = (card.base + card.per_m2 * area) * (card.severity_multiplier[sev - 1] ?? 1);
-  return { price: round5(price), low: round5(price * (1 - PRICE_SPREAD)), high: round5(price * (1 + PRICE_SPREAD)) };
+/**
+ * Any stored rate card → the current shape. Cards saved before the hourly model
+ * (`base` / `per_m2` / `severity_multiplier`) keep their base as the call-out.
+ */
+export function toRateCard(v: unknown): RateCard {
+  const o = (v && typeof v === "object" ? v : {}) as Record<string, unknown>;
+  const num = (x: unknown) => (typeof x === "number" && Number.isFinite(x) ? x : undefined);
+  if (num(o.callOut) !== undefined) {
+    return {
+      callOut: num(o.callOut)!,
+      hourly: num(o.hourly) ?? DEFAULT_RATES.hourly,
+      partsMarkupPct: num(o.partsMarkupPct) ?? DEFAULT_RATES.partsMarkupPct,
+      approveOver: num(o.approveOver) ?? DEFAULT_RATES.approveOver,
+    };
+  }
+  const base = num(o.base);
+  return base === undefined ? { ...DEFAULT_RATES } : { ...DEFAULT_RATES, callOut: round5(base), hourly: round5(base * 0.75) };
+}
+export const rateCardSchema = z.preprocess(toRateCard, rateCardShape);
+
+export const COMPLEXITIES = ["low", "medium", "high"] as const;
+export type Complexity = (typeof COMPLEXITIES)[number];
+
+/** Hours of work for a spec without the agent's estimate (older specs): from its severity. */
+const SEVERITY_HOURS = [1, 1.5, 2, 3, 4.5];
+
+/** What the spec agent estimates for a job. Every pro's price comes from these and their own rates. */
+export type JobEstimate = { severity: number; hours?: number | null; partsCost?: number | null };
+
+export const PRICE_SPREAD = 0.15;
+
+/**
+ * price = callOut (incl. 1st hour) + (hours − 1) × hourly + parts × (1 + markup); range = price ± 15%.
+ * The breakdown is what /pro shows as the agent's estimate.
+ */
+export function quote(card: RateCard, job: JobEstimate) {
+  const c = toRateCard(card);
+  const sev = Math.min(5, Math.max(1, Math.round(job.severity)));
+  const hours = job.hours != null && job.hours > 0 ? job.hours : SEVERITY_HOURS[sev - 1];
+  const extra = round5(Math.max(0, hours - 1) * c.hourly);
+  const parts = round5(Math.max(0, job.partsCost ?? 0) * (1 + c.partsMarkupPct / 100));
+  const price = round5(c.callOut + extra + parts);
+  return { hours, callOut: c.callOut, extra, parts, price, low: round5(price * (1 - PRICE_SPREAD)), high: round5(price * (1 + PRICE_SPREAD)) };
 }
 export type Quote = ReturnType<typeof quote>;
 
-/** The pricing agent can move a pro's formula price by at most this many percent either way. */
-export const PRICE_ADJUST_MAX = 40;
+/** Over the pro's limit: the agent doesn't send it; the pro reviews the request. */
+export const needsApproval = (card: RateCard, q: Pick<Quote, "price">) => q.price > toRateCard(card).approveOver;
 
-/** The pricing agent's suggestion for one pro on one spec. Stored as a percentage, so rate-card edits still apply. */
-export type PriceSuggestion = { providerId: number; adjustPct: number; reason: string };
+/** Typical rates per trade, for a homeowner estimate when no pro near them has rates for the job. */
+export const DEFAULT_RATE_CARDS: Record<string, RateCard> = {
+  mold: { callOut: 150, hourly: 95, partsMarkupPct: 15, approveOver: 1200 },
+  plumbing_sink: { callOut: 120, hourly: 90, partsMarkupPct: 15, approveOver: 600 },
+  electrical: { callOut: 130, hourly: 100, partsMarkupPct: 15, approveOver: 700 },
+  handyman: { callOut: 80, hourly: 65, partsMarkupPct: 10, approveOver: 500 },
+  roofing: { callOut: 180, hourly: 110, partsMarkupPct: 20, approveOver: 1500 },
+  painting: { callOut: 100, hourly: 60, partsMarkupPct: 10, approveOver: 1200 },
+  garden: { callOut: 70, hourly: 55, partsMarkupPct: 10, approveOver: 500 },
+  appliances: { callOut: 110, hourly: 90, partsMarkupPct: 15, approveOver: 600 },
+};
+export const FALLBACK_RATE_CARD: RateCard = DEFAULT_RATES;
 
-export const clampAdjust = (pct: number) => Math.min(PRICE_ADJUST_MAX, Math.max(-PRICE_ADJUST_MAX, Math.round(pct)));
+/** /pro → Pricing: the pro's chat with the pricing agent, the rates it drafted, and what it asks homeowners. */
+export type PricingMessage = { who: "agent" | "pro"; text: string };
+export type ProviderPricing = {
+  messages: PricingMessage[];
+  draft: RateCard;
+  /** Things the agent asks homeowners on this pro's jobs (plain words, no trade terms). */
+  asks: string[];
+  /** live: approved; the agent quotes and sends offers with these rates. */
+  status: "draft" | "live";
+  approvedAt: string | null;
+};
 
-/** The formula price moved by the agent's adjustment (clamped here too), with the same ±15% range. */
-export function suggestedQuote(card: RateCard, spec: { severity: number; areaM2: number }, adjustPct = 0): Quote {
-  const base = quote(card, spec).price;
-  const price = base * (1 + clampAdjust(adjustPct) / 100);
-  return { price: round5(price), low: round5(price * (1 - PRICE_SPREAD)), high: round5(price * (1 + PRICE_SPREAD)) };
-}
+/**
+ * Working hours: 7 days (Monday first) × 48 half-hour cells, true = open for bookings.
+ * Set in /pro → Schedule; offers and slots only fall inside them.
+ */
+export type WeekHours = boolean[][];
+const halfHours = (...spans: [number, number][]) => Array.from({ length: 48 }, (_, i) => spans.some(([a, b]) => i >= a && i < b));
+/** Mon–Fri 8–12 and 1–5, Sat 9–1, Sunday closed. */
+export const DEFAULT_HOURS: WeekHours = [
+  ...Array.from({ length: 5 }, () => halfHours([16, 24], [26, 34])),
+  halfHours([18, 26]),
+  halfHours(),
+];
 
-/** This pro's suggestion on a spec, if the pricing agent made one. */
-export const suggestionFor = (spec: { priceSuggestions?: PriceSuggestion[] | null }, providerId: number) =>
-  spec.priceSuggestions?.find((x) => x.providerId === providerId) ?? null;
-
-/** Confidence below this hands the scan to a human, with the spec attached. */
+/** Below this the spec is flagged "Low confidence" for the pro. The homeowner still gets a price. */
 export const HANDOFF_CONFIDENCE = 0.6;
 
 // ---------- Statuses ----------
@@ -174,10 +240,16 @@ export type JobSpecInfo = {
   severity: number;
   areaM2: number;
   confidence: number;
+  /** The spec agent's estimate of the work: hours, how complex, and parts at cost (CAD). Null on older specs. */
+  hours: number | null;
+  complexity: Complexity | null;
+  partsCost: number | null;
   fields: Record<string, string>;
-  /** Range for the provider the spec was priced for (null when none matched). */
+  /** Range for the provider the spec was priced for, or a best-guess estimate when none matched. */
   priceLow: number | null;
   priceHigh: number | null;
+  /** Set for a best-guess estimate (no pro's rate card): one line on what it's based on. Null for pro prices. */
+  priceBasis: string | null;
   createdAt: string;
 };
 
@@ -192,6 +264,8 @@ export type OfferInfo = {
   price: number;
   slot: string;
   status: OfferStatus;
+  /** Sent by the pro's pricing agent (their approved rates), not by hand. */
+  byAgent: boolean;
   createdAt: string;
   updatedAt: string;
 };
@@ -265,6 +339,8 @@ export type ScanResponse = {
     mark: PhotoMark | null;
     /** Set while the homeowner is answering a pro's "ask for more". */
     focus: MoreInfoRequest | null;
+    /** The questions agent's follow-up questions for this scan; null until written (see POST /api/scans/:id/questions). */
+    questions: Question[] | null;
     createdAt: string;
   };
   template: Template;
@@ -328,10 +404,12 @@ export type ProQueueCard = {
   severity: number;
   areaM2: number;
   confidence: number;
-  /** Suggested price for this pro: rate card formula, adjusted by the pricing agent. */
+  /** This pro's price: their rates × the agent's estimate of hours and parts. */
   quote: Quote;
-  /** The pricing agent's one-line reason (null: plain formula price). */
-  priceReason: string | null;
+  /** Over the pro's "send to me" limit: the agent didn't send an offer automatically. */
+  needsApproval: boolean;
+  /** The homeowner: full name once the job is this pro's, else the first name. */
+  client: string;
   distanceKm: number;
   /** This pro's offer on an open job (any status). */
   myOffer: OfferInfo | null;
@@ -359,7 +437,7 @@ export type ProProvider = {
   radiusKm: number;
   rating: number;
   ratingCount: number;
-  /** Written by the profile interview's pricing step (read-only here). */
+  /** Set in /pro → Pricing (read-only here). */
   rateCard: RateCard;
   offersVirtual: boolean;
   /** What the pro specializes in. The matching agent reads it. */
@@ -393,8 +471,8 @@ export type ProfileFacts = z.infer<typeof profileFactsSchema>;
 
 /**
  * interview  the agent is asking questions (`pending` is the open one)
- * pricing    questions done; the pro enters their prices (no AI)
- * complete   facts, description and rate card are saved
+ * pricing    (older profiles only) questions done, waiting for prices; finished on the next load
+ * complete   facts and description are saved (prices are set separately, in Pricing)
  */
 export type ProProfile = {
   stage: "interview" | "pricing" | "complete";
@@ -409,7 +487,7 @@ export type ProProfile = {
 export type ProfileStatus = "not_started" | "summary_only" | "in_progress" | "complete";
 
 /** GET /api/pro/profile, and what each interview step returns. */
-export type ProfileView = { status: ProfileStatus; profile: ProProfile | null; description: string | null; website: string | null; rateCard: RateCard; pricing: ProfilePricing };
+export type ProfileView = { status: ProfileStatus; profile: ProProfile | null; description: string | null; website: string | null };
 
 export function profileStatus(p: { profile: ProProfile | null; description: string | null }): ProfileStatus {
   if (p.profile?.stage === "complete") return "complete";
@@ -421,27 +499,6 @@ export function profileStatus(p: { profile: ProProfile | null; description: stri
 export const PROFILE_MIN_QUESTIONS = 4;
 export const PROFILE_MAX_QUESTIONS = 8;
 
-/** What the pro enters in the pricing step. Turned into the rate card in code; the pricing agent only adjusts within ±PRICE_ADJUST_MAX%. */
-export const profilePricingSchema = z.object({
-  callOut: z.number({ error: "Enter your call-out fee." }).min(0, "Prices can't be negative.").max(100000),
-  perM2: z.number({ error: "Enter your price per m²." }).min(0, "Prices can't be negative.").max(100000),
-  severePct: z.number({ error: "Enter the extra for severe jobs." }).min(0, "The extra can't be negative.").max(1000),
-});
-export type ProfilePricing = z.infer<typeof profilePricingSchema>;
-
-const round2 = (n: number) => Math.round(n * 100) / 100;
-
-/** severity 1-2 at the base price, then ramping up to +severePct% at severity 5. */
-export function rateCardFromPricing(p: ProfilePricing): RateCard {
-  const s = p.severePct / 100;
-  return { base: p.callOut, per_m2: p.perM2, severity_multiplier: [1, 1, round2(1 + s * 0.4), round2(1 + s * 0.7), round2(1 + s)] };
-}
-
-/** The pricing step's prefill from an existing rate card. */
-export function pricingFromRateCard(c: RateCard): ProfilePricing {
-  return { callOut: c.base, perM2: c.per_m2, severePct: Math.round(((c.severity_multiplier[4] ?? 1) - 1) * 100) };
-}
-
 export type ProJobDetail = {
   job: ScopeJobInfo;
   scan: ScanResponse["scan"];
@@ -449,10 +506,11 @@ export type ProJobDetail = {
   home: { address: string; lat: number; lng: number };
   photos: ScanPhotoInfo[];
   spec: JobSpecInfo;
-  /** Suggested price for this pro: current rate card formula, adjusted by the pricing agent. */
+  /** This pro's price: their rates × the agent's estimate of hours and parts, with the breakdown. */
   quote: Quote;
-  /** The pricing agent's one-line reason (null: plain formula price). */
-  priceReason: string | null;
+  needsApproval: boolean;
+  /** The homeowner: full name once the job is this pro's, else the first name. */
+  client: string;
   slots: Slot[];
   /** This pro's offer on an open job (any status). */
   myOffer: OfferInfo | null;
@@ -490,8 +548,9 @@ export const SCAN_STATUS_LABELS: Record<ScanStatus, string> = {
   cancelled: "Cancelled",
 };
 
-export const usd = (n: number) => `$${Math.round(n).toLocaleString("en-US")}`;
-export const priceRange = (low: number, high: number) => `${usd(low)} – ${usd(high)}`;
+/** Prices are Canadian dollars: "CA$1,240". */
+export const cad = (n: number) => `CA$${Math.round(n).toLocaleString("en-CA")}`;
+export const priceRange = (low: number, high: number) => `${cad(low)} – ${cad(high)}`;
 
 /** "2:00 PM" in the viewer's time zone. */
 export const timeLabel = (iso: string) => new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });

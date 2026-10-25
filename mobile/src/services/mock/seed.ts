@@ -13,8 +13,8 @@ const more: [string, string, number, number][] = [
   ["electrical", "Volt & Co", 4.6, 58],
   ["handyman", "Fix-It Fred", 4.8, 201],
   ["handyman", "Odd Jobs Collective", 4.5, 77],
-  ["locksmith", "KeyPoint Locksmiths", 4.9, 310],
-  ["locksmith", "Secure Home Locks", 4.6, 64],
+  ["roofing", "Northline Roofing", 4.9, 214],
+  ["roofing", "Summit Roof & Gutter", 4.6, 71],
   ["painting", "Fresh Coat Painters", 4.8, 122],
   ["painting", "Odd Jobs Painting", 4.5, 40],
   ["garden", "Greenleaf Gardens", 4.7, 95],
@@ -116,7 +116,7 @@ export const seedScans: Scan[] = [
     createdAt: daysAgo(1),
     followUp: {
       provider: "Northside Plumbing",
-      message: "Could you show us the shut-off valves under the sink? It helps us bring the right parts.",
+      message: "Could you show us the pipes under the sink up close? It helps us bring the right parts.",
     },
   },
 ];

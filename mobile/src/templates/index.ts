@@ -4,10 +4,10 @@ import appliances from "../../../templates/appliances.json";
 import electrical from "../../../templates/electrical.json";
 import garden from "../../../templates/garden.json";
 import handyman from "../../../templates/handyman.json";
-import locksmith from "../../../templates/locksmith.json";
 import mold from "../../../templates/mold.json";
 import painting from "../../../templates/painting.json";
 import plumbingSink from "../../../templates/plumbing_sink.json";
+import roofing from "../../../templates/roofing.json";
 
 type RawTemplate = {
   trade: string;
@@ -45,7 +45,7 @@ function load(raw: RawTemplate): TradeTemplate {
 
 // Adding a trade = adding a JSON file to /templates and listing it here.
 // Listed in the order of the design's "What's closest?" grid.
-export const templates: TradeTemplate[] = [plumbingSink, mold, electrical, handyman, locksmith, painting, garden, appliances].map(load);
+export const templates: TradeTemplate[] = [plumbingSink, mold, electrical, handyman, roofing, painting, garden, appliances].map(load);
 
 export function getTemplate(trade: TradeId): TradeTemplate {
   const t = templates.find((x) => x.trade === trade);

@@ -4,7 +4,7 @@ import { Linking, Platform, StyleSheet, View } from "react-native";
 import { Button } from "@/components/Button";
 import { Skeleton } from "@/components/Controls";
 import { Card, InfoRow, TradeArt } from "@/components/Design";
-import { goBackOrHome, Screen } from "@/components/Screen";
+import { goBackOrHome, RefreshProvider, Screen } from "@/components/Screen";
 import { ErrorState } from "@/components/States";
 import { Text } from "@/components/Text";
 import { money, moneyRange, timeOfDay, windowLabel, windowRange } from "@/domain/format";
@@ -46,7 +46,11 @@ export default function Booking() {
       </Screen>
     );
   }
-  return <Details job={job} onChange={() => void mutate()} />;
+  return (
+    <RefreshProvider onRefresh={() => mutate()}>
+      <Details job={job} onChange={() => void mutate()} />
+    </RefreshProvider>
+  );
 }
 
 const STATUS: Record<string, string> = {
@@ -67,7 +71,7 @@ function Details({ job, onChange }: { job: Job; onChange: () => void }) {
   const status = job.status === "en_route" && job.etaMinutes != null ? `On the way · ${job.etaMinutes} min` : STATUS[job.status];
   const when = job.slot ? windowLabel(job.slot.start) : "Time to be confirmed";
   const detail = job.slot ? (job.slotConfirmed ? timeOfDay(new Date(job.slot.start)) : windowRange(job.slot.start)) : null;
-  const price = job.price ? (job.price.low === job.price.high ? money(job.price.low) : moneyRange(job.price)) : job.virtual ? "Confirmed on the call" : "—";
+  const price = job.price ? (job.price.low === job.price.high ? money(job.price.low) : moneyRange(job.price)) : "To be confirmed";
 
   function message() {
     if (!job.providerPhone) return;

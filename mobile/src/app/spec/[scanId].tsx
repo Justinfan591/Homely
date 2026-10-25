@@ -229,6 +229,24 @@ function Match({ spec, options, scan, onHuman }: { spec: JobSpec; options: Match
   );
 }
 
+/** The homeowner's price when no offers are coming yet: the top pro's range or our best guess. */
+function Estimate({ spec, note }: { spec: JobSpec; note: string }) {
+  if (!spec.price) return null;
+  return (
+    <View style={styles.estimate}>
+      <Text variant="label" tone="soft">
+        Estimated price
+      </Text>
+      <Text variant="display" style={{ marginTop: 4 }}>
+        {moneyRange(spec.price)}
+      </Text>
+      <Text variant="caption" tone="soft" style={{ marginTop: 6 }}>
+        {spec.priceBasis ?? "Based on pros' rates near you."} {note}
+      </Text>
+    </View>
+  );
+}
+
 function Handoff({ spec }: { spec: JobSpec }) {
   return (
     <Screen
@@ -243,9 +261,10 @@ function Handoff({ spec }: { spec: JobSpec }) {
         A specialist will take a look
       </Text>
       <Text tone="soft" style={{ marginTop: 8 }}>
-        We weren't confident enough to price this from the photos alone. A person will review your scan, with everything
-        you've shared attached, and get back to you.
+        Here's our best estimate from your photos. A person will review your scan, with everything you've shared
+        attached, confirm the price and get back to you.
       </Text>
+      <Estimate spec={spec} note="A specialist will confirm it." />
       <View style={{ height: 32 }} />
       <Header spec={spec} />
       <Text variant="caption" tone="soft" style={{ marginTop: 24 }}>
@@ -311,6 +330,7 @@ function NoProvider({ spec, scanId }: { spec: JobSpec; scanId: string }) {
         We couldn't find a qualified pro in range of {home?.name ?? "your home"}. You can walk through the photos with{" "}
         {provider} on a video call instead.
       </Text>
+      <Estimate spec={spec} note="It's confirmed on the call." />
       <View style={{ height: 28 }} />
       <Header spec={spec} />
       <Text variant="heading" style={{ marginTop: 32, marginBottom: 14 }}>
@@ -319,9 +339,6 @@ function NoProvider({ spec, scanId }: { spec: JobSpec; scanId: string }) {
       <View style={styles.chips}>
         {slots?.map((s) => <Chip key={s.id} label={s.label} selected={slotId === s.id} onPress={() => setSlotId(s.id)} />)}
       </View>
-      <Text variant="caption" tone="soft" style={{ marginTop: 20 }}>
-        Any pricing is confirmed on the call.
-      </Text>
     </Screen>
   );
 }

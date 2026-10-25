@@ -127,6 +127,8 @@ export function createHttpApi(opts: HttpApiOptions): ScopeApi {
       areaM2: s.areaM2,
       confidence: s.confidence,
       fields: Object.entries(s.fields).map(([k, value]) => ({ label: r.template.output_labels[k] ?? k, value })),
+      price: s.priceLow != null && s.priceHigh != null ? { low: s.priceLow, high: s.priceHigh } : null,
+      priceBasis: s.priceBasis ?? null,
       createdAt: s.createdAt,
     };
   }
@@ -275,6 +277,8 @@ export function createHttpApi(opts: HttpApiOptions): ScopeApi {
 
     classify: (text, photoUri) => run(async () => h.classify(text, photoUri ? await opts.preparePhoto(photoUri) : null)),
 
+    reverseGeocode: (lat, lng) => run(async () => (await h.reverseGeocode(lat, lng)).address),
+
     listHomes: () =>
       run(async () => {
         const { home } = await h.home();
@@ -333,6 +337,9 @@ export function createHttpApi(opts: HttpApiOptions): ScopeApi {
 
     markPhoto: (scanId, shotId, x, y) => run(async () => toScan(await h.mark(Number(scanId), { shotId, x, y }))),
 
+    getQuestions: (scanId) =>
+      run(async () => (await h.questions(Number(scanId))).questions.map((q) => ({ id: q.id, q: q.q, options: q.options, optional: q.optional }))),
+
     submitAnswers: (scanId, answers, note) =>
       run(async () => {
         pending.set(scanId, { answers, note });
@@ -345,8 +352,10 @@ export function createHttpApi(opts: HttpApiOptions): ScopeApi {
         if (r.scan.status === "clarifying") {
           const p = pending.get(scanId);
           // Answers only live in memory until the estimate is made; after an app restart they're gone.
-          const asked = r.template.questions.filter((q) => !r.scan.focus || r.scan.focus.questionIds.includes(q.id));
-          if (!p && asked.some((q) => !q.optional)) throw new ApiError("Please answer the questions again.", "needs_answers");
+          const all = r.scan.questions ?? r.template.questions;
+          const asked = r.scan.focus ? [...all, ...r.template.questions].filter((q) => r.scan.focus!.questionIds.includes(q.id)) : all;
+          // A pro's questions must all be answered; otherwise only the required ones.
+          if (!p && (r.scan.focus ? asked.length > 0 : asked.some((q) => !q.optional))) throw new ApiError("Please answer the questions again.", "needs_answers");
           r = await h.finish(r.scan.id, p?.answers ?? {}, p?.note || null);
           pending.delete(scanId);
         }

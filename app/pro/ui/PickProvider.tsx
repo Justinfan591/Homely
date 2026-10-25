@@ -8,7 +8,7 @@ export function PickProvider() {
   const providers = db.select().from(schema.providers).all();
   return (
     <div className="pick">
-      <h1>Scope Pro</h1>
+      <h1>Homely Pro</h1>
       <p className="muted" style={{ marginTop: 12 }}>
         Pick the provider to run the dashboard as. The link keeps it (<code>?provider=&lt;id&gt;</code>).
       </p>

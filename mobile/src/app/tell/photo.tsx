@@ -1,6 +1,6 @@
 import { router } from "expo-router";
 import { useState } from "react";
-import { Pressable, StyleSheet, View } from "react-native";
+import { StyleSheet, View } from "react-native";
 import { CameraPanel, pickFromLibrary, Shutter, useCamera } from "@/components/CameraPanel";
 import { goHome, Screen } from "@/components/Screen";
 import { Text } from "@/components/Text";
@@ -19,6 +19,7 @@ export default function ScreeningPhoto() {
     setError(null);
     setUri(photoUri);
     try {
+      intake.source = "photo";
       intake.photoUri = photoUri;
       // The camera path: the photo alone is enough for the AI to suggest what's wrong.
       intake.text = "";
@@ -51,25 +52,16 @@ export default function ScreeningPhoto() {
       <View style={{ marginTop: 28, minHeight: 96 }}>
         <Text variant="title">Point it at the problem</Text>
         <Text tone={error ? "danger" : "soft"} style={{ marginTop: 8 }} accessibilityLiveRegion="polite">
-          {error ?? "We'll work out what's wrong from the photo."}
+          {error ?? "One photo helps us pick the right pro."}
         </Text>
       </View>
       <View style={styles.controls}>
-        <View style={styles.side}>
-          <Pressable accessibilityRole="button" onPress={() => router.replace("/tell")} disabled={busy} hitSlop={8}>
-            <Text variant="label" tone="soft" style={{ fontSize: 15 }}>
-              Describe it instead
-            </Text>
-          </Pressable>
-        </View>
         <Shutter onPress={take} disabled={busy || !camera.granted} />
-        <View style={styles.side} />
       </View>
     </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  controls: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", height: 88, marginTop: 20, marginBottom: 32 },
-  side: { width: 96 },
+  controls: { alignItems: "center", justifyContent: "center", height: 88, marginTop: 20, marginBottom: 32 },
 });

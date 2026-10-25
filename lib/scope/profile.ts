@@ -8,12 +8,9 @@ import {
   DESCRIPTION_MAX,
   PROFILE_MAX_QUESTIONS,
   PROFILE_MIN_QUESTIONS,
-  pricingFromRateCard,
   profileFactsSchema,
   profileStatus,
-  rateCardFromPricing,
   type ProfileFacts,
-  type ProfilePricing,
   type ProfileQuestion,
   type ProfileView,
   type ProfileTurn,
@@ -26,16 +23,26 @@ import { normalizeWebsite, readWebsite } from "./website";
 /**
  * The profile agent: interviews a pro on /pro, one tap-to-answer question at a time,
  * then writes structured facts and a summary the matching agent (fit.ts) reads.
- * Prices are a separate, fixed step at the end: the pro types them and code builds the rate card.
+ * Prices are set separately, in /pro → Pricing (pricing-chat.ts).
  */
 
 const { providers } = schema;
 
 export function profileView(p: Provider): ProfileView {
-  return { status: profileStatus(p), profile: p.profile, description: p.description, website: p.website, rateCard: p.rateCard, pricing: pricingFromRateCard(p.rateCard) };
+  // Profiles left waiting at the old pricing step are finished now: prices live in Pricing.
+  if (p.profile?.stage === "pricing") p = finish(p, p.profile);
+  return { status: profileStatus(p), profile: p.profile, description: p.description, website: p.website };
 }
 
-function save(p: Provider, set: Partial<Pick<Provider, "profile" | "description" | "rateCard" | "website" | "websiteText">>): Provider {
+/** Interview done: save the facts and the agent's summary as the description the matching agent reads. */
+function finish(p: Provider, profile: ProProfile): Provider {
+  return save(p, {
+    description: profile.draftDescription ?? p.description,
+    profile: { ...profile, stage: "complete", pending: null, completedAt: new Date().toISOString() },
+  });
+}
+
+function save(p: Provider, set: Partial<Pick<Provider, "profile" | "description" | "website" | "websiteText">>): Provider {
   return db.update(providers).set(set).where(eq(providers.id, p.id)).returning().get();
 }
 
@@ -166,19 +173,17 @@ function describe(p: Provider, f: ProfileFacts) {
 
 // ---------- Interview steps (each returns the saved provider) ----------
 
-/** Asks the agent for the next question, or moves to the pricing step when it's done. */
+/** Asks the agent for the next question, or finishes the profile when it's done. */
 async function advance(p: Provider, profile: ProProfile): Promise<Provider> {
   // Save first, so an AI failure never loses an answer: the pro just taps "Try again".
   p = save(p, { profile: { ...profile, pending: null } });
   const step = await nextStep(p, profile.turns);
-  return save(p, {
-    profile: step.done
-      ? { ...profile, stage: "pricing", pending: null, facts: step.facts, draftDescription: step.description }
-      : { ...profile, pending: step.question },
-  });
+  return step.done
+    ? finish(p, { ...profile, facts: step.facts, draftDescription: step.description })
+    : save(p, { profile: { ...profile, pending: step.question } });
 }
 
-/** Start (or redo) the interview. The current description and rate card stay until the pro finishes. */
+/** Start (or redo) the interview. The current description stays until the pro finishes. */
 export function startInterview(p: Provider) {
   return advance(p, { stage: "interview", turns: [], pending: null, facts: null, draftDescription: null, completedAt: null });
 }
@@ -213,18 +218,6 @@ export function skip(p: Provider) {
   const q = profile.pending;
   if (!q) throw new HttpError(409, "No question is open. Try again.");
   return advance(p, { ...profile, turns: [...profile.turns, { ...q, answer: [], note: null }] });
-}
-
-/** The last step (and later edits): the pro's prices become the rate card. Finishing also saves the summary. */
-export function savePricing(p: Provider, pricing: ProfilePricing) {
-  const profile = p.profile;
-  if (profile?.stage !== "pricing" && profile?.stage !== "complete") throw new HttpError(409, "Answer the profile questions first.");
-  if (profile.stage === "complete") return save(p, { rateCard: rateCardFromPricing(pricing) });
-  return save(p, {
-    rateCard: rateCardFromPricing(pricing),
-    description: profile.draftDescription ?? p.description,
-    profile: { ...profile, stage: "complete", completedAt: new Date().toISOString() },
-  });
 }
 
 /**

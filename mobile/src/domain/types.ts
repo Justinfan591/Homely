@@ -71,6 +71,10 @@ export type JobSpec = {
   confidence: number;
   /** Trade-specific findings, e.g. "Likely moisture source", already labelled. */
   fields: { label: string; value: string }[];
+  /** What the homeowner is shown: the top pro's range, or a best guess when no pro priced it. */
+  price?: PriceRange | null;
+  /** Set for a best guess: one line on what it's based on. */
+  priceBasis?: string | null;
   createdAt: string;
 };
 

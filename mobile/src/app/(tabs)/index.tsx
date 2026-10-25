@@ -1,5 +1,6 @@
-import { Redirect, router } from "expo-router";
-import { Pressable, StyleSheet, View } from "react-native";
+import { Redirect, router, type Href } from "expo-router";
+import { useState } from "react";
+import { Pressable, RefreshControl, ScrollView, StyleSheet, View } from "react-native";
 import Animated, { FadeIn } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ArtPile, Avatar, TradeArt } from "@/components/Design";
@@ -10,7 +11,7 @@ import { windowLabel } from "@/domain/format";
 import type { RecordItem } from "@/domain/types";
 import { useProfile, useRecord } from "@/hooks/data";
 import { useHome } from "@/hooks/home";
-import { resetIntake } from "@/hooks/intake";
+import { resetIntake, type IntakeSource } from "@/hooks/intake";
 import { colors, gutter, radius, shadow } from "@/theme";
 
 /** What the "Up next" card shows first, most urgent first. */
@@ -28,21 +29,28 @@ export default function Home() {
   if (profile.data && !profile.data.address) return <Redirect href="/setup/home" />;
 
   const next = NEXT_ORDER.map((s) => record.data?.find((i) => i.status === s)).find(Boolean);
+  const [refreshing, setRefreshing] = useState(false);
 
-  function tell() {
-    haptic.tap();
-    resetIntake();
-    router.push("/tell");
+  async function refresh() {
+    setRefreshing(true);
+    await Promise.all([record.mutate(), profile.mutate()]).catch(() => {});
+    setRefreshing(false);
   }
 
-  function snap() {
+  /** Each button is one way in: type it, say it, or show it. All three end on "Is this right?". */
+  function start(source: IntakeSource, href: Href) {
     haptic.tap();
-    resetIntake();
-    router.push("/tell/photo");
+    resetIntake(source);
+    router.push(href);
   }
 
   return (
-    <View style={[styles.screen, { paddingTop: insets.top }]}>
+    <ScrollView
+      style={styles.screen}
+      contentContainerStyle={[styles.content, { paddingTop: insets.top }]}
+      showsVerticalScrollIndicator={false}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={colors.ink} colors={[colors.ink]} />}
+    >
       {next ? (
         <Animated.View entering={FadeIn.duration(300)} style={{ flex: 1, paddingTop: 32 }}>
           <Text variant="display" accessibilityRole="header">
@@ -62,27 +70,33 @@ export default function Home() {
       <View style={styles.actions}>
         <Pressable
           accessibilityRole="button"
+          accessibilityLabel="Type it"
+          disabled={!home}
+          onPress={() => start("type", "/tell/type")}
+          style={({ pressed }) => [styles.round, shadow, pressed && { backgroundColor: colors.fillPressed }]}
+        >
+          <Icon name="type" size={24} />
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
           accessibilityLabel={next ? "Something else? Tell us what's wrong" : "Tell us what's wrong"}
           disabled={!home}
-          onPress={tell}
+          onPress={() => start("voice", "/tell")}
           style={({ pressed }) => [styles.tell, (pressed || !home) && { opacity: 0.8 }]}
         >
-          <Icon name="mic" size={22} color={colors.white} />
-          <Text variant="bodyStrong" tone="white">
-            {next ? "Something else?" : "Tell us what's wrong"}
-          </Text>
+          <Icon name="mic" size={26} color={colors.white} />
         </Pressable>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Snap a photo instead"
           disabled={!home}
-          onPress={snap}
-          style={({ pressed }) => [styles.snap, shadow, pressed && { backgroundColor: colors.fillPressed }]}
+          onPress={() => start("photo", "/tell/photo")}
+          style={({ pressed }) => [styles.round, shadow, pressed && { backgroundColor: colors.fillPressed }]}
         >
           <Icon name="camera" size={24} />
         </Pressable>
       </View>
-    </View>
+    </ScrollView>
   );
 }
 
@@ -138,7 +152,8 @@ function UpNext({ item }: { item: RecordItem }) {
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.bg, paddingHorizontal: gutter },
+  screen: { flex: 1, backgroundColor: colors.bg },
+  content: { flexGrow: 1, paddingHorizontal: gutter },
   actions: { flexDirection: "row", gap: 20, marginBottom: 12 },
   tell: {
     flex: 1,
@@ -150,7 +165,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     gap: 10,
   },
-  snap: { width: 64, height: 64, borderRadius: radius.pill, backgroundColor: colors.card, alignItems: "center", justifyContent: "center" },
+  round: { width: 64, height: 64, borderRadius: radius.pill, backgroundColor: colors.card, alignItems: "center", justifyContent: "center" },
   card: { marginTop: 24, marginBottom: 24, padding: 24, borderRadius: radius.xl, backgroundColor: colors.card, flexShrink: 1 },
   cardArt: { alignItems: "center", marginBottom: 8 },
   who: { flexDirection: "row", alignItems: "center", gap: 10, marginTop: 14 },

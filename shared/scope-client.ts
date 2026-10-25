@@ -18,19 +18,20 @@ import type {
   ProProvider,
   ProQueueResponse,
   ProfileInfo,
-  ProfilePricing,
+  ProviderPricing,
   ProfileView,
+  Question,
   ScanPhotoInfo,
   ScanResponse,
   ShotResult,
   Slot,
   TemplateSummary,
+  WeekHours,
 } from "./scope";
 
 export type ProfileAction =
   | { action: "start" | "retry" | "skip" }
   | { action: "answer"; answer: string[]; note?: string | null }
-  | { action: "pricing"; pricing: ProfilePricing }
   | { action: "description"; description: string }
   | { action: "website"; url: string };
 
@@ -143,6 +144,8 @@ export function createScopeClient(options: ScopeClientOptions = {}) {
         appendFile(form, "audio", audio, filename);
         return call<{ text: string }>("/api/intake/transcribe", { form });
       },
+      /** Current position → a street address ("12 Main St, Toronto"), or null if it can't be found. */
+      reverseGeocode: (lat: number, lng: number) => call<{ address: string | null }>(`/api/geocode/reverse?lat=${lat}&lng=${lng}`),
       /** Which trade the description (and optional screening photo) is about. Nothing is stored. */
       classify: (text: string, photo?: PhotoInput | null) => {
         const form = new FormData();
@@ -163,6 +166,11 @@ export function createScopeClient(options: ScopeClientOptions = {}) {
       },
       /** Skip an optional shot (show the shot's `skip_label` as the button). */
       skipShot: (scanId: number, shotId: string) => call<ShotResult>(scanPath(scanId, "skip"), { body: { shotId } }),
+      /**
+       * The follow-up questions the agent wrote for this scan, from what was said and photographed
+       * (written once, then stored). Call when the scan reaches "clarifying". Answer by `id` in finish().
+       */
+      questions: (scanId: number) => call<{ questions: Question[] }>(scanPath(scanId, "questions"), { method: "POST" }),
       /** Tap answers + optional note → JobSpec. Takes a few seconds with real AI. */
       finish: (scanId: number, answers: Record<string, string>, notes?: string | null) => call<ScanResponse>(scanPath(scanId, "finish"), { body: { answers, notes } }),
       /** "Get offers": sends the spec to every matching pro at once. `slot` is an optional preferred `startsAt`. Poll `scan()` for `offers`. */
@@ -201,10 +209,19 @@ export function createScopeClient(options: ScopeClientOptions = {}) {
         decline: (jobId: number) => call<ProJobDetail | { passed: true }>(job(jobId, "decline"), { ...p, method: "POST" }),
         routeToVirtualCall: (jobId: number) => call<ProJobDetail>(job(jobId, "virtual-call"), { ...p, method: "POST" }),
         setStatus: (jobId: number, to: "en_route" | "done") => call<ProJobDetail>(job(jobId, "status"), { ...p, body: { to } }),
-        /** The profile interview: status, the open question, and the pricing prefill. */
+        /** The profile interview: status and the open question. */
         profile: () => call<ProfileView>("/api/pro/profile", p),
-        /** One interview step. "pricing" ends it (and later edits prices): the rate card is built from these numbers. */
+        /** One interview step. */
         profileAction: (body: ProfileAction) => call<ProfileView>("/api/pro/profile", { ...p, body }),
+        /** Pricing chat: messages, draft rates, what the agent asks homeowners, and draft/live. */
+        pricing: () => call<ProviderPricing>("/api/pro/pricing", p),
+        /** Tell the pricing agent how you charge; it replies and updates the draft. */
+        pricingMessage: (message: string) => call<ProviderPricing>("/api/pro/pricing", { ...p, body: { action: "message", message } }),
+        /** Approve the draft: it becomes your rates, and the agent sends offers up to your limit. */
+        approvePricing: () => call<ProviderPricing>("/api/pro/pricing", { ...p, body: { action: "approve" } }),
+        /** Working hours (7 days, Monday first × 48 half-hours). Offers and slots fall inside them. */
+        hours: () => call<{ hours: WeekHours }>("/api/pro/hours", p),
+        setHours: (hours: WeekHours) => call<{ hours: WeekHours }>("/api/pro/hours", { ...p, method: "PUT", body: { hours } }),
       };
     },
 
