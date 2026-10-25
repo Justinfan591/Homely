@@ -3,6 +3,7 @@ import { useEffect, useRef, type ComponentRef, type ReactNode } from "react";
 import { Pressable, StyleSheet, TextInput, useWindowDimensions, View, type StyleProp, type TextInputProps, type ViewStyle } from "react-native";
 import Animated, {
   Easing,
+  ReduceMotion,
   useAnimatedStyle,
   useReducedMotion,
   useSharedValue,
@@ -72,12 +73,12 @@ export function ArtPile({ count = 8, style }: { count?: number; style?: StylePro
   );
 }
 
-/** Six icons circling slowly ("Finding pros near you."). */
+/** Six icons circling, each spinning as it goes ("Finding pros near you."). */
 export function ArtOrbit({ size = 84, radiusPx = 110 }: { size?: number; radiusPx?: number }) {
   const t = useSharedValue(0);
   const reduced = useReducedMotion();
   useEffect(() => {
-    if (!reduced) t.value = withRepeat(withTiming(1, { duration: 14000, easing: Easing.linear }), -1);
+    if (!reduced) t.value = withRepeat(withTiming(1, { duration: 9000, easing: Easing.linear }), -1);
   }, [t, reduced]);
   return (
     <View pointerEvents="none" style={styles.orbit} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
@@ -91,7 +92,9 @@ export function ArtOrbit({ size = 84, radiusPx = 110 }: { size?: number; radiusP
 function OrbitItem({ t, index, count, size, r, src }: { t: SharedValue<number>; index: number; count: number; size: number; r: number; src: number }) {
   const style = useAnimatedStyle(() => {
     const a = (index / count + t.value) * Math.PI * 2;
-    return { transform: [{ translateX: Math.cos(a) * r - size / 2 }, { translateY: Math.sin(a) * r - size / 2 }] };
+    return {
+      transform: [{ translateX: Math.cos(a) * r - size / 2 }, { translateY: Math.sin(a) * r - size / 2 }, { rotate: `${t.value * 720}deg` }],
+    };
   });
   return (
     <Animated.View style={[{ position: "absolute", left: "50%", top: "50%" }, style]}>
@@ -100,17 +103,28 @@ function OrbitItem({ t, index, count, size, r, src }: { t: SharedValue<number>; 
   );
 }
 
-/** The thin indeterminate bar under "Finding pros near you." */
-export function SlideBar() {
-  const x = useSharedValue(0);
-  const reduced = useReducedMotion();
+/**
+ * The bar under "Finding pros near you.": fills while we wait, quickly at first and then ever slower (pros
+ * answer in their own time, so it never claims to be full), and completes once `done` (quotes are in).
+ * It keeps filling with Reduce Motion on: it's the only sign we're still working, and a slow fill isn't the kind
+ * of motion that setting is for. (With the system setting, Reanimated would jump straight to 92% and look stuck.)
+ */
+export function ProgressBar({ done }: { done?: boolean }) {
+  const p = useSharedValue(0);
   useEffect(() => {
-    if (!reduced) x.value = withRepeat(withTiming(1, { duration: 1600, easing: Easing.inOut(Easing.ease) }), -1);
-  }, [x, reduced]);
-  const style = useAnimatedStyle(() => ({ left: `${-40 + x.value * 140}%` }));
+    const always = ReduceMotion.Never;
+    p.value = done
+      ? withTiming(1, { duration: 400, reduceMotion: always })
+      : withSequence(
+          always,
+          withTiming(0.6, { duration: 8000, easing: Easing.out(Easing.quad), reduceMotion: always }),
+          withTiming(0.92, { duration: 60000, easing: Easing.out(Easing.cubic), reduceMotion: always }),
+        );
+  }, [p, done]);
+  const style = useAnimatedStyle(() => ({ width: `${p.value * 100}%` }));
   return (
-    <View style={styles.track} accessibilityRole="progressbar">
-      <Animated.View style={[styles.slider, style]} />
+    <View style={styles.track} accessibilityRole="progressbar" accessibilityState={{ busy: !done }}>
+      <Animated.View style={[styles.fill, style]} />
     </View>
   );
 }
@@ -231,7 +245,7 @@ export function InfoRow({ label, value, onPress, last }: { label: string; value:
 const styles = StyleSheet.create({
   orbit: { flex: 1 },
   track: { height: 4, borderRadius: 999, backgroundColor: colors.line, overflow: "hidden" },
-  slider: { position: "absolute", top: 0, height: 4, width: "40%", borderRadius: 999, backgroundColor: colors.ink },
+  fill: { height: 4, borderRadius: 999, backgroundColor: colors.ink },
   field: {
     height: 60,
     borderRadius: 20,
