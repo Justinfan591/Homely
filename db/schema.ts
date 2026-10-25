@@ -181,6 +181,8 @@ export const scans = sqliteTable("scans", {
   answers: text("answers", { mode: "json" }).$type<Record<string, string>>().notNull().default({}),
   notes: text("notes"),
   skippedShots: text("skipped_shots", { mode: "json" }).$type<string[]>().notNull().default([]),
+  /** Shots the photo check found already shown in an earlier photo, so the homeowner wasn't asked for them. */
+  coveredShots: text("covered_shots", { mode: "json" }).$type<string[]>().notNull().default([]),
   /** While answering a pro's "ask for more": only these items are asked. */
   focus: text("focus", { mode: "json" }).$type<MoreInfoRequest>(),
   /** Focus shots already retaken or skipped. */
