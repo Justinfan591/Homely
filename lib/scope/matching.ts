@@ -90,6 +90,23 @@ export function slotsFor(p?: Pick<Provider, "id" | "hours">, job?: { hours?: num
   return out.map((d, i) => ({ id: `s${i + 1}`, startsAt: d.toISOString() }));
 }
 
+/**
+ * When the pricing agent books for this pro: the homeowner's requested time if the pro is free then,
+ * else the pro's first free half-hour after it (e.g. after their lunch break), else their soonest slot.
+ */
+export function slotNear(p: Pick<Provider, "id" | "hours">, job: { hours?: number | null }, wanted: Date | null, now = new Date()): Date | null {
+  const earliest = now.getTime() + 2 * 3600_000;
+  if (wanted && wanted.getTime() >= earliest) {
+    const busy = busyTimes(p.id);
+    const need = blockHours(job.hours);
+    for (let t = wanted.getTime(); t < wanted.getTime() + 7 * 24 * 3600_000; t += HALF_HOUR) {
+      if (fits(p, busy, new Date(t), need)) return new Date(t);
+    }
+  }
+  const first = slotsFor(p, job, now)[0];
+  return first ? new Date(first.startsAt) : null;
+}
+
 type PricedSpec = JobEstimate & { areaM2: number };
 
 export function toMatch(p: Provider, home: { lat: number; lng: number }, spec: PricedSpec, fitReason: string | null = null): ProviderMatch {

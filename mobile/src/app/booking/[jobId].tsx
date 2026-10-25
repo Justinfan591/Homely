@@ -64,7 +64,8 @@ function Details({ job, onChange }: { job: Job; onChange: () => void }) {
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const first = job.providerName.split(/[\s']/)[0];
+  // "Message Mold Busters"; a long company name is cut to its first word ("Message ClearSpore").
+  const first = job.providerName.length <= 18 ? job.providerName : job.providerName.split(/[\s']/)[0];
   const canCancel = job.status === "pending" || job.status === "accepted";
   const rated = job.rating != null;
 

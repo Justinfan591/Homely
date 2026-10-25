@@ -24,7 +24,7 @@ import {
 import { checkShot, generateSpec, writeQuestions } from "./ai";
 import { rankFit } from "./fit";
 import { estimatePrice } from "./estimate";
-import { distanceKm, etaMinutes, matchProviders, providersInRange, slotsFor, virtualPartner } from "./matching";
+import { distanceKm, etaMinutes, matchProviders, providersInRange, slotNear, virtualPartner } from "./matching";
 import { pricingLive } from "./pricing-chat";
 import { checkImage, readScanPhoto, signedPhotoUrl, writeScanPhoto, type ImageType } from "./photos";
 import { getTemplate } from "./templates";
@@ -575,16 +575,14 @@ export function sendAgentOffers(jobId: number) {
     if (!pricingLive(p) || job.declinedBy.includes(p.id)) continue;
     const q = quote(p.rateCard, spec);
     if (needsApproval(p.rateCard, q)) continue;
-    const free = slotsFor(p, spec);
-    const wanted = job.requestedSlot && free.find((s) => Math.abs(new Date(s.startsAt).getTime() - job.requestedSlot!.getTime()) < 60_000);
-    const at = wanted ?? free[0];
+    const at = slotNear(p, spec, job.requestedSlot ?? null, now);
     if (!at) continue;
     // Never overwrite an offer the pro sent by hand.
     const mine = db.select().from(offers).where(and(eq(offers.jobId, job.id), eq(offers.providerId, p.id))).get();
     if (mine && !mine.byAgent && mine.status === "active") continue;
     db.insert(offers)
-      .values({ jobId: job.id, providerId: p.id, price: q.price, slot: new Date(at.startsAt), status: "active", byAgent: true })
-      .onConflictDoUpdate({ target: [offers.jobId, offers.providerId], set: { price: q.price, slot: new Date(at.startsAt), status: "active", byAgent: true, updatedAt: now } })
+      .values({ jobId: job.id, providerId: p.id, price: q.price, slot: at, status: "active", byAgent: true })
+      .onConflictDoUpdate({ target: [offers.jobId, offers.providerId], set: { price: q.price, slot: at, status: "active", byAgent: true, updatedAt: now } })
       .run();
     sent++;
   }

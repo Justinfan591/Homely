@@ -149,13 +149,13 @@ async function scanToSpec(trade = "mold", notes: string | null = "Behind the bat
 
 /** A request open to every matching pro, or null if real Claude handed it off for low confidence. */
 /** An open mold request. The flows below act as Mold Busters, so with real AI it's skipped if the matching agent left them out. */
-async function openRequest() {
+async function openRequest(slot?: string) {
   const s = await scanToSpec();
   if (s.scan.status !== "spec_ready") {
     aiCheck(false, `spec ready (got ${s.scan.status})`);
     return null;
   }
-  const opened = await api.homeowner.requestOffers(s.scan.id);
+  const opened = await api.homeowner.requestOffers(s.scan.id, slot);
   if (!(await inTab("Mold Busters", "new", opened.job!.id))) {
     aiCheck(false, "the matching agent invited Mold Busters; rest of this flow skipped");
     await api.homeowner.cancel(s.scan.id);
@@ -579,6 +579,29 @@ async function main() {
           check(!!at && at.getHours() >= 9 && at.getHours() < 12 && at.getDay() !== 0, `agent's offer is inside working hours (${at?.toString()})`);
           check(!(await api.homeowner.scan(c.scanId)).offers.some((o) => o.provider.name === "ClearSpore Remediation"), "pros without approved pricing don't get automatic offers");
           await api.homeowner.cancel(c.scanId);
+        }
+        // The homeowner's preferred time: used when the pro is free then, else their next free time after it.
+        const day = (n: number, hour: number) => {
+          const d = new Date();
+          d.setDate(d.getDate() + n);
+          if (d.getDay() === 0) d.setDate(d.getDate() + 1);
+          d.setHours(hour, 0, 0, 0);
+          return d;
+        };
+        const inHours = day(3, 9);
+        const f = await openRequest(inHours.toISOString());
+        if (f) {
+          const at = new Date((await api.homeowner.scan(f.scanId)).offers.find((o) => o.provider.name === "Mold Busters")?.slot ?? 0);
+          aiCheck(at.getTime() === inHours.getTime(), `agent's offer is at the homeowner's time when the pro is free (${at.toString()})`);
+          await api.homeowner.cancel(f.scanId);
+        }
+        const afterHours = day(2, 14);
+        const g = await openRequest(afterHours.toISOString());
+        if (g) {
+          const at = new Date((await api.homeowner.scan(g.scanId)).offers.find((o) => o.provider.name === "Mold Busters")?.slot ?? 0);
+          check(at.getTime() >= afterHours.getTime(), `outside working hours: the offer is after the homeowner's time, not before it (${at.toString()})`);
+          aiCheck(at.getHours() === 9 && at.getTime() - afterHours.getTime() < 2 * 24 * 3600_000, `…at the start of the pro's next morning (${at.toString()})`);
+          await api.homeowner.cancel(g.scanId);
         }
         // Over the limit: the agent leaves it to the pro.
         await mb.pricingMessage("Send me anything over CA$50.");
