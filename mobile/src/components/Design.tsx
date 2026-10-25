@@ -73,27 +73,30 @@ export function ArtPile({ count = 8, style }: { count?: number; style?: StylePro
   );
 }
 
-/** Six icons circling, each spinning as it goes ("Finding pros near you."). */
+/**
+ * Six icons circling, each spinning as it goes ("Finding pros near you."). Like the ProgressBar it keeps going
+ * with Reduce Motion on (standing still reads as frozen), but slower and without the spin.
+ */
 export function ArtOrbit({ size = 84, radiusPx = 110 }: { size?: number; radiusPx?: number }) {
   const t = useSharedValue(0);
   const reduced = useReducedMotion();
   useEffect(() => {
-    if (!reduced) t.value = withRepeat(withTiming(1, { duration: 9000, easing: Easing.linear }), -1);
+    t.value = withRepeat(withTiming(1, { duration: reduced ? 24000 : 9000, easing: Easing.linear, reduceMotion: ReduceMotion.Never }), -1, false, undefined, ReduceMotion.Never);
   }, [t, reduced]);
   return (
     <View pointerEvents="none" style={styles.orbit} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
       {allArt.slice(0, 6).map((src, i) => (
-        <OrbitItem key={i} t={t} index={i} count={6} size={size} r={radiusPx} src={src} />
+        <OrbitItem key={i} t={t} index={i} count={6} size={size} r={radiusPx} src={src} spin={!reduced} />
       ))}
     </View>
   );
 }
 
-function OrbitItem({ t, index, count, size, r, src }: { t: SharedValue<number>; index: number; count: number; size: number; r: number; src: number }) {
+function OrbitItem({ t, index, count, size, r, src, spin }: { t: SharedValue<number>; index: number; count: number; size: number; r: number; src: number; spin: boolean }) {
   const style = useAnimatedStyle(() => {
     const a = (index / count + t.value) * Math.PI * 2;
     return {
-      transform: [{ translateX: Math.cos(a) * r - size / 2 }, { translateY: Math.sin(a) * r - size / 2 }, { rotate: `${t.value * 720}deg` }],
+      transform: [{ translateX: Math.cos(a) * r - size / 2 }, { translateY: Math.sin(a) * r - size / 2 }, { rotate: `${spin ? t.value * 720 : 0}deg` }],
     };
   });
   return (
