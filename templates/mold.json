@@ -37,5 +37,9 @@
       "Do not make health claims."
     ]
   },
-  "virtual_call_label": "Book a Mold Busters virtual assessment"
+  "virtual_call_label": "Book a Mold Busters virtual assessment",
+  "no_photos": {
+    "title": "No photos, but you suspect mold?",
+    "prompt": "Some mold hides behind walls, under floors or in the attic. Tell us the symptoms and where you think it is."
+  }
 }

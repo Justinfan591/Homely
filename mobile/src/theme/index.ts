@@ -33,6 +33,9 @@ export const radius = { sm: 12, md: 24, lg: 28, xl: 36, pill: 999 };
 
 export const gutter = 24;
 
+/** Widest the app's column gets (iPad, web). The design is drawn at 390 px; wider screens scale up to this and centre it. */
+export const maxWidth = 600;
+
 export const fonts = {
   regular: "InterTight_400Regular",
   medium: "InterTight_500Medium",

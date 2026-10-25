@@ -361,6 +361,18 @@ export function skipShot(scan: Scan, shotId: string): ShotResult {
   return { ok: true, message: "Skipped.", status, remainingShots: remainingShots({ ...current, status }, template, scanPhotoRows(scan.id)) };
 }
 
+/** Nothing to photograph (templates with `no_photos`, e.g. hidden mold): skip every shot and keep what they described. */
+export function describeInstead(scan: Scan, description: string) {
+  const template = getTemplate(scan.trade);
+  if (!template.no_photos) throw new HttpError(400, "This job needs photos.");
+  if (scan.status !== "capturing" || scan.focus) throw new HttpError(409, "This scan isn't taking photos right now.");
+  touch(scan.id, {
+    description: [scan.description, description.trim()].filter(Boolean).join("\n\n"),
+    skippedShots: template.required_shots.map((s) => s.id),
+    status: "clarifying",
+  });
+}
+
 // ---------- Questions → JobSpec ----------
 
 /**
@@ -443,7 +455,7 @@ export async function finishScan(scan: Scan, home: Home, input: { answers: Recor
   try {
     const rows = scanPhotoRows(scan.id);
     const best = bestPhotos(template, rows);
-    if (!best.length) throw new HttpError(400, "Take at least one photo first.");
+    if (!best.length && !template.no_photos) throw new HttpError(400, "Take at least one photo first.");
     const job = jobOfScan(scan.id);
     const generated = await generateSpec({
       template,

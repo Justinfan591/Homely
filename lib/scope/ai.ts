@@ -270,8 +270,12 @@ export async function generateSpec(input: SpecInput): Promise<GeneratedSpec> {
     content.push(imageBlock(p.image));
     content.push({ type: "text", text: "</photo>" });
   }
+  if (!input.photos.length) {
+    content.push({ type: "text", text: "None: the homeowner can't see the problem and described it instead. Work from their description and keep confidence low." });
+  }
   content.push({ type: "text", text: "</photos>" });
-  const skipped = input.skippedShots.map((id) => {
+  // No photos at all: every shot was skipped at once, so the skip reasons say nothing.
+  const skipped = (input.photos.length ? input.skippedShots : []).map((id) => {
     const s = t.required_shots.find((x) => x.id === id);
     return `- "${s?.prompt ?? id}": ${s?.skip_label ?? "skipped"}`;
   });
@@ -490,7 +494,8 @@ export async function writeQuestions(input: QuestionsInput): Promise<Question[]>
     const shot = t.required_shots.find((s) => s.id === o.shotId);
     return `- "${shot?.prompt ?? o.shotId}": ${o.observation || "(no notes)"}`;
   });
-  const skipped = input.skippedShots.map((id) => {
+  // No photos at all (hidden mold): every shot was skipped at once, so the skip reasons say nothing.
+  const skipped = (shots.length ? input.skippedShots : []).map((id) => {
     const s = t.required_shots.find((x) => x.id === id);
     return `- "${s?.prompt ?? id}": ${s?.skip_label ?? "skipped"}`;
   });
@@ -498,7 +503,7 @@ export async function writeQuestions(input: QuestionsInput): Promise<Question[]>
   const markShot = mark && t.required_shots.find((s) => s.id === mark.shotId);
   const text = [
     `<homeowner_description>\n${input.description?.trim() || "(They didn't describe it; they picked the problem or started from a photo.)"}\n</homeowner_description>`,
-    `<photo_notes>\n${shots.length ? shots.join("\n") : "None."}\n</photo_notes>`,
+    `<photo_notes>\n${shots.length ? shots.join("\n") : "None: they can't see the problem, so ask about what they notice instead (smell, symptoms, where, since when)."}\n</photo_notes>`,
     `<skipped_shots>\n${skipped.length ? skipped.join("\n") : "None."}\n</skipped_shots>`,
     markShot ? `The homeowner marked the problem on the photo "${markShot.prompt}".` : "",
     input.proAsks?.length

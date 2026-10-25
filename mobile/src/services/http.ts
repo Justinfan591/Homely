@@ -337,6 +337,8 @@ export function createHttpApi(opts: HttpApiOptions): ScopeApi {
         return toScan(await scan(scanId));
       }),
 
+    describeInstead: (scanId, description) => run(async () => toScan(await h.describeInstead(Number(scanId), description))),
+
     markPhoto: (scanId, shotId, x, y) => run(async () => toScan(await h.mark(Number(scanId), { shotId, x, y }))),
 
     getQuestions: (scanId) =>

@@ -3,9 +3,10 @@ import { useState } from "react";
 import { Pressable, RefreshControl, ScrollView, StyleSheet, View } from "react-native";
 import Animated, { FadeIn } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { ArtPile, Avatar, TradeArt } from "@/components/Design";
+import { Avatar, TradeArt } from "@/components/Design";
 import { haptic } from "@/components/haptics";
 import { Icon } from "@/components/Icon";
+import { ServiceGrid } from "@/components/ServiceGrid";
 import { Text } from "@/components/Text";
 import { windowLabel } from "@/domain/format";
 import type { RecordItem } from "@/domain/types";
@@ -52,39 +53,36 @@ export default function Home() {
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={colors.ink} colors={[colors.ink]} />}
     >
       {next ? (
-        <Animated.View entering={FadeIn.duration(300)} style={{ flex: 1, paddingTop: 32 }}>
+        <Animated.View entering={FadeIn.duration(300)} style={{ paddingTop: 32 }}>
           <Text variant="display" accessibilityRole="header">
             Up next
           </Text>
           <UpNext item={next} />
         </Animated.View>
-      ) : (
-        <ArtPile style={{ marginHorizontal: -gutter }} />
-      )}
-
-      {next ? null : (
-        <Text variant="hero" accessibilityRole="header" style={{ marginTop: 32, marginBottom: 28 }} numberOfLines={1} adjustsFontSizeToFit>
-          What needs fixing?
-        </Text>
-      )}
+      ) : null}
+      <Text
+        variant={next ? "title" : "hero"}
+        accessibilityRole="header"
+        style={{ marginTop: next ? 0 : 32, marginBottom: 24 }}
+        numberOfLines={1}
+        adjustsFontSizeToFit
+      >
+        {next ? "Something else?" : "What needs fixing?"}
+      </Text>
+      <ServiceGrid fresh />
+      {/* "Type it" is the grid's Other tile; saying it or showing it are the other two ways in. */}
       <View style={styles.actions}>
+        <Text variant="label" tone="soft">
+          Or tell us
+        </Text>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="Type it"
-          disabled={!home}
-          onPress={() => start("type", "/tell/type")}
-          style={({ pressed }) => [styles.round, shadow, pressed && { backgroundColor: colors.fillPressed }]}
-        >
-          <Icon name="type" size={24} />
-        </Pressable>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={next ? "Something else? Tell us what's wrong" : "Tell us what's wrong"}
+          accessibilityLabel="Tell us what's wrong"
           disabled={!home}
           onPress={() => start("voice", "/tell")}
           style={({ pressed }) => [styles.tell, (pressed || !home) && { opacity: 0.8 }]}
         >
-          <Icon name="mic" size={26} color={colors.white} />
+          <Icon name="mic" size={24} color={colors.white} />
         </Pressable>
         <Pressable
           accessibilityRole="button"
@@ -154,7 +152,7 @@ function UpNext({ item }: { item: RecordItem }) {
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg },
   content: { flexGrow: 1, paddingHorizontal: gutter },
-  actions: { flexDirection: "row", gap: 20, marginBottom: 12 },
+  actions: { flexDirection: "row", alignItems: "center", gap: 16, marginTop: 20, marginBottom: 24 },
   tell: {
     flex: 1,
     height: 64,

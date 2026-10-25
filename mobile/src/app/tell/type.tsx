@@ -49,7 +49,7 @@ export default function TypeIt() {
         }
       >
         <View style={{ marginTop: 40 }}>
-          <Title title="What's wrong?" sub="What you see, and where." />
+          <Title title="Describe your issue." sub="We'll match you to a professional." />
         </View>
         <View style={{ marginTop: 32 }}>
           <NoteBox

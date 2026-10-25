@@ -181,6 +181,13 @@ export default function ScanScreen() {
           <Text tone={notice ? "danger" : "soft"} style={{ marginTop: 8 }} accessibilityLiveRegion="polite">
             {notice ?? (index === 0 && !taken.length ? `${shot.tip ?? ""} Keep faces and documents out of the frame.`.trim() : shot.tip)}
           </Text>
+          {template.noPhotos && !scan.followUp && index === 0 && !taken.length && live ? (
+            <Pressable accessibilityRole="button" onPress={() => router.push(`/describe/${scanId}`)} hitSlop={8} style={{ marginTop: 12 }}>
+              <Text variant="label" style={{ textDecorationLine: "underline" }}>
+                Can't see it? Describe it instead
+              </Text>
+            </Pressable>
+          ) : null}
         </Animated.View>
       </Animated.View>
 

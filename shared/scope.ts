@@ -41,6 +41,8 @@ export const templateSchema = z.object({
     rules: z.array(z.string()).default([]),
   }),
   virtual_call_label: z.string().default("Book a virtual assessment"),
+  /** Lets the homeowner skip every photo and describe the problem instead (e.g. mold hidden behind a wall). */
+  no_photos: z.object({ title: z.string(), prompt: z.string() }).optional(),
 });
 export type Template = z.infer<typeof templateSchema>;
 export type Shot = Template["required_shots"][number];

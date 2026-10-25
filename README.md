@@ -237,6 +237,7 @@ All endpoints are JSON under `/api`. Homeowner routes need `Authorization: Beare
 | POST | `/scans` `{ trade, description? }` | Start a scan → `{ id }` |
 | GET | `/scans/:id` | Everything the scan screens render. Poll every 2 s while tracking. |
 | POST | `/scans/:id/shots`, `/skip`, `/mark` | Upload a shot (Claude checks it), skip an optional one, mark the spot |
+| POST | `/scans/:id/describe` | Templates with `no_photos` (mold): skip every shot and keep `{ description }` (symptoms and where) instead → `clarifying` |
 | GET | `/scans/:id/questions` | The questions agent's questions |
 | POST | `/scans/:id/finish` `{ answers, notes? }` | → job spec, estimate and matched pros |
 | POST | `/scans/:id/request` `{ slot? }` | Send to every matched pro (auto offers fire here) |

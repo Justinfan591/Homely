@@ -39,6 +39,6 @@ export async function startFromIntake(homeId: string, trade: TradeId) {
   }
   resetIntake();
   // Drop the "Tell us" screens so leaving the scan returns to the tabs.
-  router.dismissAll();
+  if (router.canDismiss()) router.dismissAll();
   router.push(`/scan/${scan.id}`);
 }

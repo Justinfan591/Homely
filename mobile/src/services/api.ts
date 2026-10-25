@@ -71,6 +71,8 @@ export interface ScopeApi {
   submitPhoto(scanId: string, shotId: string, uri: string): Promise<PhotoVerdict>;
   /** Marks a shot as not applicable (e.g. a wall with only one side). */
   skipShot(scanId: string, shotId: string): Promise<Scan>;
+  /** "No photos, but you suspect mold?": skips every shot and keeps the description. Only for templates with `noPhotos`. */
+  describeInstead(scanId: string, description: string): Promise<Scan>;
   /** "Move the dot to the leak": x and y in % of the photo. */
   markPhoto(scanId: string, shotId: string, x: number, y: number): Promise<Scan>;
   /**
