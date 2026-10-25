@@ -1,8 +1,9 @@
 import { CameraView, useCameraPermissions } from "expo-camera";
 import { Image } from "expo-image";
 import * as ImagePicker from "expo-image-picker";
-import { useRef, type ReactNode, type RefObject } from "react";
+import { useRef, useState, type ReactNode, type RefObject } from "react";
 import { ActivityIndicator, Linking, Pressable, StyleSheet, View } from "react-native";
+import { GestureDetector, usePinchGesture } from "react-native-gesture-handler";
 import Animated, { FadeIn, FadeOut, useAnimatedStyle, useSharedValue, withSequence, withTiming } from "react-native-reanimated";
 import { colors, radius } from "@/theme";
 import { Button } from "./Button";
@@ -10,9 +11,19 @@ import { haptic } from "./haptics";
 import { Icon } from "./Icon";
 import { Text } from "./Text";
 
-/** Camera state shared by the photo screens: permission, the camera ref, and a shutter flash. */
+/**
+ * Pinch zoom. expo-camera's `zoom` is 0–1 on a log scale on iOS (1× up to the device's max digital zoom),
+ * so a log of the pinch scale tracks the fingers about 1:1 there. Capped near 15×, past which it's just blur.
+ * ponytail: Android maps zoom linearly, so pinching feels faster there; tune PINCH per platform if it matters.
+ */
+const PINCH = 0.22;
+const MAX_ZOOM = 0.6;
+const clampZoom = (z: number) => Math.min(MAX_ZOOM, Math.max(0, z));
+
+/** Camera state shared by the photo screens: permission, the camera ref, zoom, and a shutter flash. */
 export function useCamera() {
   const [permission, requestPermission] = useCameraPermissions();
+  const [zoom, setZoom] = useState(0);
   const ref = useRef<CameraView>(null);
   const flash = useSharedValue(0);
   const flashStyle = useAnimatedStyle(() => ({ opacity: flash.value }));
@@ -26,7 +37,7 @@ export function useCamera() {
     return photo?.uri ?? null;
   }
 
-  return { permission, requestPermission, ref, snap, flashStyle, granted: !!permission?.granted };
+  return { permission, requestPermission, ref, snap, flashStyle, zoom, setZoom, granted: !!permission?.granted };
 }
 
 export async function pickFromLibrary(): Promise<string | null> {
@@ -52,11 +63,26 @@ export function CameraPanel({
   onLibrary?: () => void;
   children?: ReactNode;
 }) {
-  const { permission, requestPermission, ref, granted, flashStyle } = camera;
+  const { permission, requestPermission, ref, granted, flashStyle, zoom, setZoom } = camera;
+  // Pinch to zoom, live, like the iPhone camera.
+  const pinchStart = useRef(0);
+  const zoomNow = useRef(zoom);
+  zoomNow.current = zoom;
+  const pinch = usePinchGesture({
+    runOnJS: true,
+    onBegin: () => {
+      pinchStart.current = zoomNow.current;
+    },
+    onUpdate: (e) => setZoom(clampZoom(pinchStart.current + Math.log(e.scale) * PINCH)),
+  });
   return (
     <View style={styles.panel}>
       {granted ? (
-        <CameraView ref={ref as RefObject<CameraView>} style={StyleSheet.absoluteFill} facing="back" />
+        <GestureDetector gesture={pinch}>
+          <View style={StyleSheet.absoluteFill} accessibilityHint="Pinch to zoom">
+            <CameraView ref={ref as RefObject<CameraView>} style={StyleSheet.absoluteFill} facing="back" zoom={zoom} />
+          </View>
+        </GestureDetector>
       ) : permission && !permission.granted ? (
         <View style={styles.permission}>
           <Icon name="camera" size={28} color={colors.white} />
@@ -102,6 +128,25 @@ export function CameraPanel({
         </Animated.View>
       ) : null}
 
+      {granted && !previewUri && zoom > 0.01 ? (
+        <Animated.View entering={FadeIn.duration(120)} exiting={FadeOut.duration(120)} style={styles.zoomWrap}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Zoom back out"
+            onPress={() => {
+              haptic.select();
+              setZoom(0);
+            }}
+            hitSlop={8}
+            style={styles.zoomPill}
+          >
+            <Text variant="label" tone="white">
+              1×
+            </Text>
+          </Pressable>
+        </Animated.View>
+      ) : null}
+
       {onLibrary ? (
         <Pressable accessibilityRole="button" accessibilityLabel="Choose from library" onPress={onLibrary} hitSlop={8} style={styles.library}>
           <Icon name="image" size={20} color="white" />
@@ -141,6 +186,15 @@ const styles = StyleSheet.create({
     borderRadius: radius.pill,
     backgroundColor: "rgba(22,21,19,0.75)",
     maxWidth: "85%",
+  },
+  zoomWrap: { position: "absolute", left: 0, right: 0, bottom: 24, alignItems: "center" },
+  zoomPill: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: "rgba(0,0,0,0.45)",
+    alignItems: "center",
+    justifyContent: "center",
   },
   library: {
     position: "absolute",

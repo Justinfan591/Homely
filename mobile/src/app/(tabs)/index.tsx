@@ -3,10 +3,9 @@ import { useState } from "react";
 import { Pressable, RefreshControl, ScrollView, StyleSheet, View } from "react-native";
 import Animated, { FadeIn } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { Avatar, TradeArt } from "@/components/Design";
+import { ArtPile, Avatar, TradeArt } from "@/components/Design";
 import { haptic } from "@/components/haptics";
 import { Icon } from "@/components/Icon";
-import { ServiceGrid } from "@/components/ServiceGrid";
 import { Text } from "@/components/Text";
 import { windowLabel } from "@/domain/format";
 import type { RecordItem } from "@/domain/types";
@@ -30,6 +29,7 @@ export default function Home() {
   if (profile.data && !profile.data.name.trim()) return <Redirect href="/setup/name" />;
   if (profile.data && !profile.data.address) return <Redirect href="/setup/home" />;
 
+  const first = profile.data?.name.trim().split(/\s+/)[0];
   const next = NEXT_ORDER.map((s) => record.data?.find((i) => i.status === s)).find(Boolean);
 
   async function refresh() {
@@ -53,24 +53,22 @@ export default function Home() {
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={colors.ink} colors={[colors.ink]} />}
     >
       {next ? (
-        <Animated.View entering={FadeIn.duration(300)} style={{ paddingTop: 32 }}>
+        <Animated.View entering={FadeIn.duration(300)} style={{ flex: 1, paddingTop: 32 }}>
           <Text variant="display" accessibilityRole="header">
             Up next
           </Text>
           <UpNext item={next} />
+          <View style={{ flex: 1 }} />
         </Animated.View>
-      ) : null}
-      <Text
-        variant={next ? "title" : "hero"}
-        accessibilityRole="header"
-        style={{ marginTop: next ? 0 : 32, marginBottom: 24 }}
-        numberOfLines={1}
-        adjustsFontSizeToFit
-      >
-        {next ? "Something else?" : "What needs fixing?"}
-      </Text>
-      <ServiceGrid fresh />
-      {/* Three more ways in under the grid: type it (same as the Other tile), say it, or show it. */}
+      ) : (
+        <>
+          <ArtPile style={{ marginHorizontal: -gutter }} />
+          <Text variant="hero" accessibilityRole="header" style={{ marginTop: 8, marginBottom: 8 }} numberOfLines={2} adjustsFontSizeToFit>
+            {first ? `Hi ${first},\n` : ""}What needs fixing?
+          </Text>
+        </>
+      )}
+      {/* The three ways in: type it, say it, or show it. */}
       <View style={styles.actions}>
         <Pressable
           accessibilityRole="button"

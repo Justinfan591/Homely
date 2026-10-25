@@ -407,7 +407,7 @@ export const mockApi: ScopeApi = {
       scan.photos = [...scan.photos.filter((p) => p.shotId !== shotId), { shotId, uri, ok: true }];
       scan.pendingShotIds = scan.pendingShotIds.filter((s) => s !== shotId);
       outcomes.delete(scanId);
-      return { ok: true, message: "Got it." };
+      return { ok: true, message: "Got it.", pendingShotIds: [...scan.pendingShotIds] };
     }),
 
   skipShot: (scanId, shotId) =>

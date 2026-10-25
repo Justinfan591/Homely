@@ -328,7 +328,7 @@ export function createHttpApi(opts: HttpApiOptions): ScopeApi {
     submitPhoto: (scanId, shotId, uri) =>
       run(async () => {
         const res = await h.uploadShot(Number(scanId), shotId, await opts.preparePhoto(uri), "photo.jpg");
-        return res.ok ? { ok: true, message: res.message } : { ok: false, reason: "wrong_subject", message: res.message };
+        return res.ok ? { ok: true, message: res.message, pendingShotIds: res.remainingShots } : { ok: false, reason: "wrong_subject", message: res.message };
       }),
 
     skipShot: (scanId, shotId) =>

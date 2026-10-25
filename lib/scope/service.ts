@@ -93,7 +93,7 @@ export function remainingShots(scan: Scan, template: Template, rows: ScanPhoto[]
     return template.required_shots.filter((s) => scan.focus!.shotIds.includes(s.id) && !scan.focusDone.includes(s.id)).map((s) => s.id);
   }
   return template.required_shots
-    .filter((s) => !scan.skippedShots.includes(s.id) && !rows.some((r) => r.shotId === s.id && r.ok))
+    .filter((s) => !scan.skippedShots.includes(s.id) && !scan.coveredShots.includes(s.id) && !rows.some((r) => r.shotId === s.id && r.ok))
     .map((s) => s.id);
 }
 
@@ -330,7 +330,11 @@ export async function recordShot(scan: Scan, shotId: string, file: File): Promis
   checking.add(scan.id);
   try {
     const bytes = Buffer.from(await file.arrayBuffer());
-    const check = await checkShot(template, shot, { data: bytes, type });
+    // The photo may already show shots still to come; those aren't asked for. Not while answering a pro's
+    // "ask for more": they asked for those shots by name.
+    const left = remainingShots(scan, template, scanPhotoRows(scan.id));
+    const upcoming = scan.focus ? [] : template.required_shots.filter((s) => s.id !== shotId && left.includes(s.id));
+    const check = await checkShot(template, shot, { data: bytes, type }, upcoming);
     const path = await writeScanPhoto(scan.id, bytes, type);
     db.insert(scanPhotos)
       .values({ scanId: scan.id, shotId, path, mime: type, ok: check.ok, feedback: check.message, observation: check.ok ? check.observation : null })
@@ -339,6 +343,7 @@ export async function recordShot(scan: Scan, shotId: string, file: File): Promis
     if (check.ok) {
       current = touch(scan.id, {
         skippedShots: scan.skippedShots.filter((s) => s !== shotId),
+        coveredShots: [...new Set([...scan.coveredShots.filter((s) => s !== shotId), ...check.covers])],
         ...(scan.focus ? { focusDone: [...new Set([...scan.focusDone, shotId])] } : {}),
       });
     }
@@ -412,6 +417,7 @@ export async function ensureQuestions(scan: Scan, home: Home): Promise<Question[
       description: scan.description ?? null,
       observations: rows.map((p) => ({ shotId: p.shotId, observation: p.observation })),
       skippedShots: scan.skippedShots,
+      coveredShots: scan.coveredShots,
       mark: scan.mark ?? null,
       // What the nearby pros told their pricing agent to ask, so their quotes have what they need.
       proAsks: [...new Set(providersInRange(scan.trade, home).filter(pricingLive).flatMap((p) => p.pricing?.asks ?? []))].slice(0, 12),
@@ -461,6 +467,7 @@ export async function finishScan(scan: Scan, home: Home, input: { answers: Recor
       template,
       photos: await Promise.all(best.map(async (p) => ({ shotId: p.shotId, observation: p.observation, image: { data: await readScanPhoto(p), type: p.mime as ImageType } }))),
       skippedShots: scan.skippedShots,
+      coveredShots: scan.coveredShots,
       answers,
       notes,
       description: scan.description ?? null,

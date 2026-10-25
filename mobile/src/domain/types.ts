@@ -59,7 +59,8 @@ export type PhotoMark = { shotId: string; x: number; y: number };
 export type FollowUp = { provider: string; message: string; questionIds?: string[] };
 
 export type PhotoVerdict =
-  | { ok: true; message: string }
+  /** pendingShotIds: what's still to take. The photo check drops shots this photo already shows. */
+  | { ok: true; message: string; pendingShotIds: string[] }
   | { ok: false; reason: "blurry" | "wrong_subject" | "too_dark"; message: string };
 
 export type JobSpec = {

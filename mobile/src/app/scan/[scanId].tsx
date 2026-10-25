@@ -15,7 +15,7 @@ import { api } from "@/services";
 import { getTemplate } from "@/templates";
 import { colors, shadow } from "@/theme";
 
-type Phase = { kind: "live" } | { kind: "checking"; uri: string } | { kind: "accepted"; uri: string };
+type Phase = { kind: "live" } | { kind: "checking"; uri: string } | { kind: "accepted"; uri: string; text: string };
 
 /** Capture · guided photos. One prompt at a time; each photo is checked before moving on. */
 export default function ScanScreen() {
@@ -27,6 +27,8 @@ export default function ScanScreen() {
   const [notice, setNotice] = useState<string | null>(null);
   const [index, setIndex] = useState(0);
   const [taken, setTaken] = useState<string[]>([]);
+  // Shots the server still wants; the photo check can drop ones a photo already shows.
+  const [pending, setPending] = useState<string[] | null>(null);
   const [ready, setReady] = useState(false);
   const [busy, setBusy] = useState(false);
   const shake = useSharedValue(0);
@@ -71,10 +73,11 @@ export default function ScanScreen() {
     if (scan && template && ready && shots.length === 0) void finish();
   }, [scan, template, ready, shots.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  function advance() {
-    if (index + 1 >= shots.length) void finish();
+  function advance(stillPending = pending) {
+    const next = shots.findIndex((s, i) => i > index && (!stillPending || stillPending.includes(s.id)));
+    if (next < 0) void finish();
     else {
-      setIndex(index + 1);
+      setIndex(next);
       setPhase({ kind: "live" });
       setNotice(null);
     }
@@ -89,8 +92,10 @@ export default function ScanScreen() {
       if (verdict.ok) {
         haptic.success();
         setTaken((t) => [...t, uri]);
-        setPhase({ kind: "accepted", uri });
-        setTimeout(advance, 650);
+        setPending(verdict.pendingShotIds);
+        const covered = shots.filter((s, i) => i > index && !verdict.pendingShotIds.includes(s.id)).length;
+        setPhase({ kind: "accepted", uri, text: covered ? `Got it. That covers ${covered === 1 ? "the next shot" : `${covered} more shots`} too` : "Got it" });
+        setTimeout(() => advance(verdict.pendingShotIds), covered ? 1100 : 650);
       } else {
         haptic.warning();
         shake.value = withSequence(
@@ -131,8 +136,9 @@ export default function ScanScreen() {
     if (!shot || phase.kind !== "live") return;
     haptic.select();
     try {
-      await api.skipShot(scanId, shot.id);
-      advance();
+      const s = await api.skipShot(scanId, shot.id);
+      setPending(s.pendingShotIds);
+      advance(s.pendingShotIds);
     } catch (e) {
       setNotice(e instanceof Error ? e.message : "Couldn't skip that one.");
     }
@@ -157,7 +163,7 @@ export default function ScanScreen() {
 
   const live = phase.kind === "live";
   const status =
-    phase.kind === "checking" ? { text: "Checking photo…" } : phase.kind === "accepted" ? { text: "Got it", done: true } : null;
+    phase.kind === "checking" ? { text: "Checking photo…" } : phase.kind === "accepted" ? { text: phase.text, done: true } : null;
 
   return (
     <Screen

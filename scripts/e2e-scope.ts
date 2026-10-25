@@ -203,6 +203,8 @@ async function main() {
     const local = profiles?.get(p.id);
     return { id: p.id, rating: p.rating, ratingCount: p.ratingCount, rateCard: local?.rateCard ?? p.rateCard, description: p.description, profile: local?.profile ?? null, pricing: local?.pricing ?? null, hours: local?.hours ?? null };
   });
+  // The seed approves one pro's pricing per trade; the flows expect none until they approve one.
+  const pricingBack = profiles ? clearPricing() : null;
   const email = `e2e-${Date.now()}@scope.test`;
   const userIds: number[] = [];
 
@@ -668,6 +670,7 @@ async function main() {
       check(err.status === 404 && typeof (await err.json()).error === "string", "errors are { error } JSON");
     });
   } finally {
+    pricingBack?.();
     if (KEEP) console.log(`\nKept the test data. Sign in as ${email} / e2e-password to see it.`);
     else cleanup(userIds, snapshot);
   }
@@ -687,6 +690,17 @@ function localProfiles() {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { db, schema: t } = require("../db/index") as typeof import("../db/index");
   return new Map(db.select().from(t.providers).all().map((p) => [p.id, { profile: p.profile, pricing: p.pricing, hours: p.hours, rateCard: p.rateCard }]));
+}
+
+/** Clears every provider's pricing in the local database; returns what puts it back. */
+function clearPricing() {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { db, schema: t } = require("../db/index") as typeof import("../db/index");
+  const before = db.select().from(t.providers).all();
+  db.update(t.providers).set({ pricing: null }).run();
+  return () => {
+    for (const p of before) db.update(t.providers).set({ pricing: p.pricing }).where(eq(t.providers.id, p.id)).run();
+  };
 }
 
 function cleanup(userIds: number[], snapshot: ProviderSnapshot[]) {

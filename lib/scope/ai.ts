@@ -8,6 +8,8 @@ import type { ImageType } from "./photos";
 
 // Named in SOON26.md. All responses are JSON-only (structured outputs) and zod-validated.
 const MODEL = "claude-sonnet-5-5";
+/** The per-photo check runs while the homeowner waits on the camera, so it uses the fastest model. */
+const FAST_MODEL = "claude-haiku-5-5";
 
 /**
  * SCOPE_FAKE_AI=1 swaps both Claude calls for instant, free, predictable answers,
@@ -34,14 +36,18 @@ const imageBlock = (img: Image): Anthropic.Beta.BetaImageBlockParam => ({
   source: { type: "base64", media_type: img.type, data: img.data.toString("base64") },
 });
 
-export async function parse<T extends z.ZodType>(schema: T, params: { system: string; content: Anthropic.Beta.BetaContentBlockParam[]; effort: "low" | "medium" }) {
+export async function parse<T extends z.ZodType>(
+  schema: T,
+  params: { system: string; content: Anthropic.Beta.BetaContentBlockParam[]; effort: "low" | "medium"; model?: string },
+) {
+  const model = params.model ?? MODEL;
   let response;
   try {
     response = await getClient().beta.messages.parse({
-      model: MODEL,
+      model,
       max_tokens: 16000,
-      betas: ["server-side-fallback-2026-07-01"],
-      fallbacks: "default",
+      // Haiku has no server-side refusal fallback.
+      ...(model === FAST_MODEL ? {} : { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const }),
       output_config: { effort: params.effort, format: betaZodOutputFormat(schema) },
       system: params.system,
       messages: [{ role: "user", content: params.content }],
@@ -84,6 +90,10 @@ export const policyLines = (t: Template) => t.policy.rules.map((r) => `- ${r}`).
 /** For agents whose short lines aren't the spec: the rules are there to stop diagnosing, not to be repeated. */
 export const SHORT_LINE_RULES = "These rules only stop you from diagnosing: don't repeat testing advice or the finding wording in your line.";
 
+/** Skipped-shot lines for shots the photo check found already shown in another photo. */
+const coveredLines = (t: Template, ids: string[] = []) =>
+  ids.map((id) => `- "${t.required_shots.find((x) => x.id === id)?.prompt ?? id}": not asked for, already shown in another photo`);
+
 /** One line of agent text for the UI. Cuts off JSON debris that sometimes leaks into a string ("...prices.}, {"). */
 export const cleanLine = (s: string, max = 200) =>
   s.split(/[{}]/)[0].replace(/[​-‍﻿]/g, "").replace(/\s+/g, " ").trim().slice(0, max);
@@ -104,6 +114,7 @@ const shotCheckSchema = z.object({
   issue: z.enum(["none", "blurry", "too_dark", "wrong_subject", "too_far", "too_close", "person_or_document"]),
   message: z.string(),
   observation: z.string(),
+  covers: z.array(z.string()),
 });
 export type ShotCheck = z.infer<typeof shotCheckSchema>;
 
@@ -125,17 +136,21 @@ observation (empty if ok=false): one or two factual sentences for the spec write
 - rough size, compared with something in frame (a tile, an outlet, a door, the cabinet);
 - access: height (ceiling, high wall), enclosed or tight spaces, things in the way;
 - any visible moisture source, standing or active water, or no visible problem.
-Describe; never diagnose, and follow the wording rules you are given. Don't add advice or recommendations (such as testing): the spec writer handles those.`;
+Describe; never diagnose, and follow the wording rules you are given. Don't add advice or recommendations (such as testing): the spec writer handles those.
 
-export async function checkShot(template: Template, shot: Shot, image: Image): Promise<ShotCheck> {
+covers (empty if ok=false): ids of the upcoming shots you are given that this photo already shows well enough that asking for them would add nothing. Keep the scan short: after the photos the homeowner puts a dot on the problem, so a close-up is only worth asking for when the problem's detail (texture, colour, size, the exact spot) can't be made out here. For example, a photo of the area where the problem is near and sharp covers the close-up; a photo that clearly takes in the ceiling above covers the ceiling shot. A close-up almost never covers a step-back shot of the whole room or area: pros need its size and access. Only list shots you can really see; a missing shot hurts the estimate more than one more photo.`;
+
+/** `upcoming`: the shots still to take after this one, which this photo may already cover. */
+export async function checkShot(template: Template, shot: Shot, image: Image, upcoming: Shot[] = []): Promise<ShotCheck> {
   if (fakeAi()) {
     return image.data.length < 2048
-      ? { ok: false, issue: "too_dark", message: "Too dark to see. Turn on a light and retake.", observation: "" }
-      : { ok: true, issue: "none", message: "Got it.", observation: `Test photo for "${shot.prompt}".` };
+      ? { ok: false, issue: "too_dark", message: "Too dark to see. Turn on a light and retake.", observation: "", covers: [] }
+      : { ok: true, issue: "none", message: "Got it.", observation: `Test photo for "${shot.prompt}".`, covers: [] };
   }
   const result = await parse(shotCheckSchema, {
     system: SHOT_SYSTEM,
     effort: "low",
+    model: FAST_MODEL,
     content: [
       imageBlock(image),
       {
@@ -145,6 +160,9 @@ export async function checkShot(template: Template, shot: Shot, image: Image): P
           `Requested shot: "${shot.prompt}"`,
           ...(shot.hint ? [`What it should show: ${shot.hint}`] : []),
           ``,
+          `Upcoming shots (id: what it asks for):`,
+          ...(upcoming.length ? upcoming.map((s) => `- ${s.id}: "${s.prompt}"${s.hint ? ` (${s.hint})` : ""}`) : ["None."]),
+          ``,
           `Wording rules for observations:`,
           policyLines(template),
         ].join("\n"),
@@ -152,6 +170,7 @@ export async function checkShot(template: Template, shot: Shot, image: Image): P
     ],
   });
   if (result.ok) result.issue = "none";
+  result.covers = result.ok ? result.covers.filter((id) => upcoming.some((s) => s.id === id)) : [];
   return result;
 }
 
@@ -176,6 +195,8 @@ export type SpecInput = {
   template: Template;
   photos: { shotId: string; observation: string | null; image: Image }[];
   skippedShots: string[];
+  /** Shots not asked for because an earlier photo already shows them. */
+  coveredShots?: string[];
   answers: Record<string, string>;
   notes: string | null;
   /** What the homeowner said before the photos (voice screen). */
@@ -278,7 +299,7 @@ export async function generateSpec(input: SpecInput): Promise<GeneratedSpec> {
   const skipped = (input.photos.length ? input.skippedShots : []).map((id) => {
     const s = t.required_shots.find((x) => x.id === id);
     return `- "${s?.prompt ?? id}": ${s?.skip_label ?? "skipped"}`;
-  });
+  }).concat(coveredLines(t, input.coveredShots));
   const answers = t.questions
     .filter((q) => input.answers[q.id])
     .map((q) => {
@@ -434,6 +455,7 @@ export type QuestionsInput = {
   /** The per-photo check's notes for each usable shot. */
   observations: { shotId: string; observation: string | null }[];
   skippedShots: string[];
+  coveredShots?: string[];
   mark: PhotoMark | null;
   /** What nearby pros told their pricing agent to ask homeowners on these jobs. */
   proAsks?: string[];
@@ -498,7 +520,7 @@ export async function writeQuestions(input: QuestionsInput): Promise<Question[]>
   const skipped = (shots.length ? input.skippedShots : []).map((id) => {
     const s = t.required_shots.find((x) => x.id === id);
     return `- "${s?.prompt ?? id}": ${s?.skip_label ?? "skipped"}`;
-  });
+  }).concat(coveredLines(t, input.coveredShots));
   const mark = input.mark;
   const markShot = mark && t.required_shots.find((s) => s.id === mark.shotId);
   const text = [
