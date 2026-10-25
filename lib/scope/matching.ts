@@ -124,14 +124,17 @@ export function toMatch(p: Provider, home: { lat: number; lng: number }, spec: P
   };
 }
 
-/** Active providers for this trade whose service radius covers the home. */
+/** MATCH_BY_LOCATION=0 ignores service radius: every active pro in the trade is matched, wherever the home is. */
+const matchByLocation = () => process.env.MATCH_BY_LOCATION !== "0";
+
+/** Active providers for this trade whose service radius covers the home (or all of them, with MATCH_BY_LOCATION=0). */
 export function providersInRange(trade: string, home: { lat: number; lng: number }, exclude: number[] = []): Provider[] {
   return db
     .select()
     .from(schema.providers)
     .where(eq(schema.providers.active, true))
     .all()
-    .filter((p) => p.trades.includes(trade) && !exclude.includes(p.id) && distanceKm(home, p) <= p.radiusKm);
+    .filter((p) => p.trades.includes(trade) && !exclude.includes(p.id) && (!matchByLocation() || distanceKm(home, p) <= p.radiusKm));
 }
 
 /**
